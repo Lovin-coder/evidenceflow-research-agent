@@ -35,11 +35,26 @@ class ContractModel(BaseModel):
 class EvidenceNeed(ContractModel):
     """Describe the evidence properties needed to answer a medical question."""
 
-    evidence_types: list[NonEmptyText] = Field(default_factory=list)
-    study_types: list[NonEmptyText] = Field(default_factory=list)
-    source_policy: list[NonEmptyText] = Field(default_factory=list)
-    date_constraints: list[NonEmptyText] = Field(default_factory=list)
-    coverage_dimensions: list[NonEmptyText] = Field(default_factory=list)
+    evidence_types: list[NonEmptyText] = Field(
+        default_factory=list,
+        description="Evidence categories needed to answer the medical question.",
+    )
+    study_types: list[NonEmptyText] = Field(
+        default_factory=list,
+        description="Preferred or required study designs without implying quality judgment.",
+    )
+    source_policy: list[NonEmptyText] = Field(
+        default_factory=list,
+        description="Inclusion, exclusion, or required-source constraints for research.",
+    )
+    date_constraints: list[NonEmptyText] = Field(
+        default_factory=list,
+        description="Time boundaries governing evidence retrieval and inclusion.",
+    )
+    coverage_dimensions: list[NonEmptyText] = Field(
+        default_factory=list,
+        description="Clinical or analytical dimensions the evidence must cover.",
+    )
 
     @model_validator(mode="after")
     def require_domain_semantics(self) -> "EvidenceNeed":
@@ -60,30 +75,63 @@ class EvidenceNeed(ContractModel):
 class MedicalResearchBrief(ContractModel):
     """Represent the normalized medical research specification for a run."""
 
-    normalized_question: NonEmptyText
-    question_type: NonEmptyText
-    clinical_elements: dict[str, NonEmptyText | list[NonEmptyText]] | None = None
-    constraints: list[NonEmptyText]
-    research_intent: NonEmptyText
-    evidence_needs: list[EvidenceNeed] = Field(min_length=1)
+    normalized_question: NonEmptyText = Field(
+        description="Normalized medical question driving research planning."
+    )
+    question_type: NonEmptyText = Field(
+        description="Open-text medical question category used for domain-aware planning."
+    )
+    clinical_elements: dict[str, NonEmptyText | list[NonEmptyText]] | None = Field(
+        default=None,
+        description="Structured clinical elements, including PICO concepts when applicable.",
+    )
+    constraints: list[NonEmptyText] = Field(
+        description="Run-level population, time, language, region, or output constraints."
+    )
+    research_intent: NonEmptyText = Field(
+        description="Decision, comparison, explanation, or exploration the research supports."
+    )
+    evidence_needs: list[EvidenceNeed] = Field(
+        min_length=1,
+        description="Nested evidence requirements guiding downstream task planning and retrieval.",
+    )
 
 
 class MedicalResearchTask(ContractModel):
     """Represent one stable Supervisor-to-Researcher delegation."""
 
-    task_id: NonEmptyText
-    research_question: NonEmptyText
-    evidence_needs: list[EvidenceNeed] = Field(min_length=1)
-    source_preferences: list[NonEmptyText]
-    priority: int = Field(ge=0)
+    task_id: NonEmptyText = Field(
+        description="Host-assigned run-local identity for one logical research delegation."
+    )
+    research_question: NonEmptyText = Field(
+        description="Focused, self-contained question assigned to one Researcher invocation."
+    )
+    evidence_needs: list[EvidenceNeed] = Field(
+        min_length=1,
+        description="Evidence requirements this delegated task must address."
+    )
+    source_preferences: list[NonEmptyText] = Field(
+        description="Non-binding source or provider preferences that cannot weaken source policy."
+    )
+    priority: int = Field(
+        ge=0,
+        description="Relative planning priority without an execution-order guarantee.",
+    )
 
 
 class SourceRecord(ContractModel):
     """Represent a compact, externally sourced artifact identity."""
 
-    source_id: NonEmptyText
-    artifact_ref: NonEmptyText | None = None
-    metadata: dict[str, str]
+    source_id: NonEmptyText = Field(
+        description="Stable run-local identity used by Evidence provenance references."
+    )
+    artifact_ref: NonEmptyText | None = Field(
+        default=None,
+        description="Optional opaque reference to raw content outside Graph State.",
+    )
+    metadata: dict[str, str] = Field(
+        description="Compact source and retrieval provenance metadata, never the raw artifact."
+    )
 
     @model_validator(mode="after")
     def require_compact_metadata(self) -> "SourceRecord":
@@ -105,22 +153,44 @@ class SourceRecord(ContractModel):
 class EvidenceRecord(ContractModel):
     """Represent a compact source-derived passage with auditable provenance."""
 
-    evidence_id: NonEmptyText
-    source_id: NonEmptyText
-    locator: NonEmptyText
-    excerpt: NonEmptyText
-    hash: NonEmptyText
+    evidence_id: NonEmptyText = Field(
+        description="Stable identity for one selected, auditable evidence passage."
+    )
+    source_id: NonEmptyText = Field(
+        description="Identity of the SourceRecord from which this evidence was selected."
+    )
+    locator: NonEmptyText = Field(
+        description="Auditable location of the passage within its source artifact."
+    )
+    excerpt: NonEmptyText = Field(
+        description="Compact source-derived passage, not model-generated interpretation."
+    )
+    hash: NonEmptyText = Field(
+        description="Content hash supporting passage audit and change detection."
+    )
 
 
 class ResearchFinding(ContractModel):
     """Represent a task-local interpretation grounded in Evidence records."""
 
-    finding_id: NonEmptyText
-    task_id: NonEmptyText
-    text: NonEmptyText
-    evidence_ids: list[NonEmptyText]
-    limitations: list[NonEmptyText]
-    conflicts: list[NonEmptyText]
+    finding_id: NonEmptyText = Field(
+        description="Stable identity for one task-local research conclusion."
+    )
+    task_id: NonEmptyText = Field(
+        description="MedicalResearchTask identity that produced this finding."
+    )
+    text: NonEmptyText = Field(
+        description="Bounded model interpretation derived from the referenced evidence."
+    )
+    evidence_ids: list[NonEmptyText] = Field(
+        description="Evidence identities supporting or constraining this finding."
+    )
+    limitations: list[NonEmptyText] = Field(
+        description="Evidence gaps, applicability limits, or methodological caveats."
+    )
+    conflicts: list[NonEmptyText] = Field(
+        description="Materially conflicting evidence or interpretations that remain visible."
+    )
 
     @model_validator(mode="after")
     def require_evidence_or_explicit_insufficiency(self) -> "ResearchFinding":
@@ -146,16 +216,39 @@ class ResearchTaskStatus(str, Enum):
 class ResearchTaskResult(ContractModel):
     """Represent the stable Researcher-to-Supervisor output boundary."""
 
-    contract_version: NonEmptyText = Field(default=CONTRACT_VERSION, frozen=True)
-    task_id: NonEmptyText
-    status: ResearchTaskStatus
-    findings: list[ResearchFinding]
-    evidence_ids: list[NonEmptyText]
-    source_ids: list[NonEmptyText]
-    summary: NonEmptyText
-    limitations: list[NonEmptyText]
-    conflicts: list[NonEmptyText]
-    error: NonEmptyText | None = None
+    contract_version: NonEmptyText = Field(
+        default=CONTRACT_VERSION,
+        frozen=True,
+        description="Serialized EvidenceFlow contract version for this cross-graph result.",
+    )
+    task_id: NonEmptyText = Field(
+        description="Identity of the MedicalResearchTask represented by this result."
+    )
+    status: ResearchTaskStatus = Field(
+        description="Execution and termination outcome, not an evidence-quality judgment."
+    )
+    findings: list[ResearchFinding] = Field(
+        description="Task-local findings exposed across the Researcher boundary."
+    )
+    evidence_ids: list[NonEmptyText] = Field(
+        description="Evidence identities used or preserved by this task result."
+    )
+    source_ids: list[NonEmptyText] = Field(
+        description="Source identities used or explicitly preserved by this task result."
+    )
+    summary: NonEmptyText = Field(
+        description="Bounded Supervisor-facing synthesis that is not a provenance source."
+    )
+    limitations: list[NonEmptyText] = Field(
+        description="Task-level scope limits, execution constraints, or evidence gaps."
+    )
+    conflicts: list[NonEmptyText] = Field(
+        description="Task-level conflicts requiring visibility or later synthesis."
+    )
+    error: NonEmptyText | None = Field(
+        default=None,
+        description="Operational failure detail for partial or failed execution outcomes.",
+    )
 
     @model_validator(mode="after")
     def validate_result_envelope(self) -> "ResearchTaskResult":
@@ -192,7 +285,18 @@ def validate_provenance_graph(
     sources: list[SourceRecord],
     evidence: list[EvidenceRecord],
 ) -> None:
-    """Validate run-local Task, Source, Evidence, Finding, and Result references."""
+    """Validate all run-local provenance references exposed by a task result.
+
+    Args:
+        task: Delegated task that owns the result and its findings.
+        result: Cross-graph result whose references must be resolvable.
+        sources: Run-local SourceRecord registry available to the result.
+        evidence: Run-local EvidenceRecord registry available to the result.
+
+    Raises:
+        ValueError: If an identity is duplicated, dangling, or inconsistent with the
+            task/result provenance graph.
+    """
     if result.task_id != task.task_id:
         raise ValueError("ResearchTaskResult.task_id must match MedicalResearchTask.task_id")
 

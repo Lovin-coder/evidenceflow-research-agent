@@ -95,7 +95,19 @@ def _merge_identity_models(
     new_value: list[IdentityModel],
     identity_field: str,
 ) -> list[IdentityModel]:
-    """Append distinct identities, deduplicate replays, and reject conflicts."""
+    """Merge immutable contract objects using their stable identity.
+
+    Args:
+        current_value: Contract objects already present in the state channel.
+        new_value: Contract objects supplied by the current partial update.
+        identity_field: Stable model field used to detect replay and conflicts.
+
+    Returns:
+        Existing objects followed by newly observed identities in arrival order.
+
+    Raises:
+        ValueError: If the same identity is associated with a different payload.
+    """
     merged = list(current_value)
     by_identity = {getattr(item, identity_field): item for item in merged}
     for item in new_value:
@@ -105,6 +117,7 @@ def _merge_identity_models(
             by_identity[identity] = item
             merged.append(item)
         elif existing != item:
+            # Exact replay is idempotent; divergent immutable content is a contract error.
             raise ValueError(
                 f"Contract conflict for {identity_field}={identity!r}: "
                 "the same identity has different payloads"
@@ -116,35 +129,35 @@ def research_results_reducer(
     current_value: list[ResearchTaskResult],
     new_value: list[ResearchTaskResult],
 ) -> list[ResearchTaskResult]:
-    """Aggregate immutable task results by task identity."""
+    """Append task results while making exact task replay idempotent."""
     return _merge_identity_models(current_value, new_value, "task_id")
 
 
 def source_records_reducer(
     current_value: list[SourceRecord], new_value: list[SourceRecord]
 ) -> list[SourceRecord]:
-    """Aggregate immutable source records by source identity."""
+    """Append SourceRecords while making exact source replay idempotent."""
     return _merge_identity_models(current_value, new_value, "source_id")
 
 
 def evidence_records_reducer(
     current_value: list[EvidenceRecord], new_value: list[EvidenceRecord]
 ) -> list[EvidenceRecord]:
-    """Aggregate immutable evidence records by evidence identity."""
+    """Append EvidenceRecords while making exact evidence replay idempotent."""
     return _merge_identity_models(current_value, new_value, "evidence_id")
 
 
 def findings_reducer(
     current_value: list[ResearchFinding], new_value: list[ResearchFinding]
 ) -> list[ResearchFinding]:
-    """Aggregate immutable findings by finding identity."""
+    """Append ResearchFindings while making exact finding replay idempotent."""
     return _merge_identity_models(current_value, new_value, "finding_id")
     
 class AgentInputState(MessagesState):
     """InputState is only 'messages'."""
 
 class AgentState(MessagesState):
-    """Main agent state containing messages and research data."""
+    """Parent graph state carrying structured results and legacy report channels."""
     
     supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     medical_research_brief: Optional[MedicalResearchBrief]
@@ -155,7 +168,7 @@ class AgentState(MessagesState):
     final_report: str
 
 class SupervisorState(TypedDict):
-    """State for the supervisor that manages research tasks."""
+    """Supervisor-local planning state with bounded task-result observations."""
     
     supervisor_messages: Annotated[list[MessageLikeRepresentation], override_reducer]
     medical_research_brief: MedicalResearchBrief
@@ -166,7 +179,7 @@ class SupervisorState(TypedDict):
     raw_notes: Annotated[list[str], override_reducer]
 
 class ResearcherState(TypedDict):
-    """State for individual researchers conducting research."""
+    """Researcher-local process state for one MedicalResearchTask invocation."""
     
     task: MedicalResearchTask
     researcher_messages: Annotated[list[MessageLikeRepresentation], operator.add]
@@ -181,7 +194,7 @@ class ResearcherState(TypedDict):
     raw_notes: Annotated[list[str], override_reducer]
 
 class ResearcherOutputState(BaseModel):
-    """Output state from individual researchers."""
+    """Project the stable task result plus temporary legacy compatibility outputs."""
     
     research_task_result: ResearchTaskResult
     compressed_research: str

@@ -82,7 +82,14 @@ def _render_evidence_need(evidence_need: EvidenceNeed) -> list[str]:
 
 
 def render_medical_research_brief(brief: MedicalResearchBrief) -> str:
-    """Project a typed brief into the bounded legacy text interface."""
+    """Render the canonical typed brief as deterministic legacy Markdown.
+
+    Args:
+        brief: Structured medical planning contract that remains the source of truth.
+
+    Returns:
+        Bounded Markdown for the existing Supervisor message interface.
+    """
     lines = [
         "# Medical Research Brief",
         f"- Normalized question: {brief.normalized_question}",
@@ -106,7 +113,14 @@ def render_medical_research_brief(brief: MedicalResearchBrief) -> str:
 
 
 def render_medical_research_task(task: MedicalResearchTask) -> str:
-    """Project a typed task into the legacy Researcher topic interface."""
+    """Render a typed delegation as deterministic legacy Researcher input.
+
+    Args:
+        task: Host-materialized task contract passed across the subgraph boundary.
+
+    Returns:
+        Bounded Markdown for the existing ``research_topic`` compatibility path.
+    """
     lines = [
         "# Medical Research Task",
         f"- Task ID: {task.task_id}",
@@ -133,7 +147,21 @@ def _runtime_tool_call_id(
 
 
 def _encode_tool_call_id(value: str) -> str:
-    """Encode a provider call ID injectively without changing its correlation value."""
+    """Encode a provider call ID into an injective task-identity component.
+
+    Percent encoding retains a reversible distinction between provider IDs that a
+    lossy character replacement would collapse, while the original ID remains
+    unchanged for ToolMessage correlation.
+
+    Args:
+        value: Non-blank provider tool-call identity.
+
+    Returns:
+        Deterministic percent-encoded identity component.
+
+    Raises:
+        ValueError: If the provider identity is blank.
+    """
     if not value.strip():
         raise ValueError("Tool call ID cannot produce an empty task identity")
     return quote(value, safe="")
@@ -142,7 +170,20 @@ def _encode_tool_call_id(value: str) -> str:
 def materialize_medical_research_task(
     tool_call: dict[str, Any], research_iteration: int, ordinal: int
 ) -> tuple[MedicalResearchTask, str]:
-    """Validate a ConductResearch envelope and assign its stable host identity."""
+    """Validate one delegation envelope and materialize its domain task contract.
+
+    Args:
+        tool_call: LLM tool call containing task semantics but no domain identity.
+        research_iteration: Supervisor iteration used by the missing-ID fallback.
+        ordinal: One-based call position used by the missing-ID fallback.
+
+    Returns:
+        The host-identified MedicalResearchTask and its runtime correlation ID.
+
+    Raises:
+        ValidationError: If ConductResearch arguments violate the tool contract.
+        ValueError: If a supplied provider call ID cannot form a task identity.
+    """
     call_id = _runtime_tool_call_id(tool_call, research_iteration, ordinal)
     provider_call_id = str(tool_call.get("id") or "")
     task_identity = (
@@ -166,7 +207,19 @@ def _failed_research_result(
     evidence_records: list[EvidenceRecord] | None = None,
     findings: list[ResearchFinding] | None = None,
 ) -> ResearchTaskResult:
-    """Create a failed result while preserving already materialized contract objects."""
+    """Create a failed result without discarding materialized research artifacts.
+
+    Args:
+        task: Materialized task whose execution or result construction failed.
+        error: Stable operational error text exposed across the parent boundary.
+        source_records: Sources materialized before the failure, if available.
+        evidence_records: Evidence materialized before the failure, if available.
+        findings: Findings materialized before the failure, if available.
+
+    Returns:
+        A FAILED ResearchTaskResult retaining all available Source, Evidence, and
+        Finding references plus their limitations and conflicts.
+    """
     preserved_sources = source_records or []
     preserved_evidence = evidence_records or []
     preserved_findings = findings or []
@@ -199,7 +252,16 @@ async def _invoke_research_task(
     task: MedicalResearchTask,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """Invoke one Researcher and isolate failures to that materialized task."""
+    """Adapt one typed task into a Researcher invocation and isolate child failure.
+
+    Args:
+        task: Stable Supervisor-to-Researcher task contract.
+        config: Runtime configuration forwarded to the Researcher subgraph.
+
+    Returns:
+        Researcher output containing the typed result and legacy compatibility text.
+        Child exceptions are converted into a task-correlated FAILED result.
+    """
     research_topic = render_medical_research_task(task)
     try:
         observation = await researcher_subgraph.ainvoke(
@@ -286,9 +348,8 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
 async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_supervisor"]]:
     """Transform user messages into a structured research brief and initialize supervisor.
     
-    This function analyzes the user's messages and generates a focused research brief
-    that will guide the research supervisor. It also sets up the initial supervisor
-    context with appropriate prompts and instructions.
+    This function makes MedicalResearchBrief the canonical planning object and derives
+    the legacy Markdown view used by the existing Supervisor message interface.
     
     Args:
         state: Current agent state containing user messages
@@ -321,6 +382,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     )
     response = await research_model.ainvoke([HumanMessage(content=prompt_content)])
     medical_research_brief = MedicalResearchBrief.model_validate(response)
+    # Structured data is authoritative; legacy text is a deterministic migration view.
     legacy_research_brief = render_medical_research_brief(medical_research_brief)
     
     # Step 3: Initialize supervisor with research brief and instructions
@@ -396,6 +458,9 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
 async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Command[Literal["supervisor", "__end__"]]:
     """Execute tools called by the supervisor, including research delegation and strategic thinking.
     
+    ConductResearch calls are validated and host-materialized here so the model owns
+    task semantics while runtime code owns stable identity and failure isolation.
+
     This function handles three types of supervisor tool calls:
     1. think_tool - Strategic reflection that continues the conversation
     2. ConductResearch - Delegates research tasks to sub-researchers
@@ -618,6 +683,10 @@ async def execute_tool_safely(tool, args, config):
 async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Command[Literal["researcher", "compress_research"]]:
     """Execute tools called by the researcher, including search tools and strategic thinking.
     
+    Status updates describe execution/termination only: normal termination is SUCCESS,
+    a budget-bound stop is PARTIAL, and explicit ResearchComplete takes precedence when
+    it coincides with the budget boundary.
+
     This function handles various types of researcher tool calls:
     1. think_tool - Strategic reflection that continues the research conversation
     2. Search tools (tavily_search, web_search) - Information gathering
@@ -702,18 +771,21 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
     )
 
 async def compress_research(state: ResearcherState, config: RunnableConfig):
-    """Compress and synthesize research findings into a concise, structured summary.
+    """Build typed and legacy outputs from the same Researcher execution.
     
     This function takes all the research findings, tool outputs, and AI messages from
     a researcher's work and distills them into a clean, comprehensive summary while
-    preserving all important information and findings.
+    preserving all important information and findings. If compression cannot complete,
+    the FAILED result still retains Source, Evidence, and Finding objects already
+    materialized in Researcher-local state.
     
     Args:
         state: Current researcher state with accumulated research messages
         config: Runtime configuration with compression model settings
         
     Returns:
-        Dictionary containing compressed research summary and raw notes
+        Dictionary containing ResearchTaskResult, compressed legacy summary, and raw
+        legacy notes from the same execution.
     """
     # Step 1: Configure the compression model
     configurable = Configuration.from_runnable_config(config)
@@ -791,7 +863,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
                 error=None,
             )
 
-            # Return typed and legacy outputs from the same execution.
+            # One execution feeds both paths; legacy text never replaces typed provenance.
             return {
                 "research_task_result": result,
                 "compressed_research": summary,
@@ -816,6 +888,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
     ])
     
     error = "compression_failure: maximum retries exceeded"
+    # Compression failure must not erase structured work already present in local state.
     return {
         "research_task_result": _failed_research_result(
             state["task"],

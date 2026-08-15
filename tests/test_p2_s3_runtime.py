@@ -18,6 +18,7 @@ runtime = importlib.import_module("open_deep_research.deep_researcher")
 
 
 def need() -> EvidenceNeed:
+    """Build nested evidence requirements for runtime adapter tests."""
     return EvidenceNeed(
         evidence_types=["treatment effectiveness"],
         coverage_dimensions=["benefits", "harms"],
@@ -25,6 +26,7 @@ def need() -> EvidenceNeed:
 
 
 def task_args(question: str) -> dict:
+    """Build the model-facing ConductResearch argument envelope."""
     return {
         "research_question": question,
         "evidence_needs": [need().model_dump()],
@@ -34,6 +36,8 @@ def task_args(question: str) -> dict:
 
 
 class FakeModel:
+    """Provide deterministic model responses without external calls."""
+
     def __init__(self, response):
         self.response = response
         self.structured_schema = None
@@ -56,11 +60,15 @@ class FakeModel:
 
 
 class FailingModel(FakeModel):
+    """Force deterministic model failure for compression-path tests."""
+
     async def ainvoke(self, _messages):
         raise RuntimeError("model unavailable")
 
 
 class LocalTool:
+    """Provide a deterministic local tool with the runtime's minimal interface."""
+
     def __init__(self, name: str):
         self.name = name
 
@@ -69,10 +77,12 @@ class LocalTool:
 
 
 async def local_researcher_tools(_config):
+    """Return local-only tools for termination mapping tests."""
     return [LocalTool("think_tool"), LocalTool("ResearchComplete")]
 
 
 def successful_result(task: MedicalResearchTask) -> ResearchTaskResult:
+    """Build a successful shadow result correlated to one materialized task."""
     return ResearchTaskResult(
         task_id=task.task_id,
         status=ResearchTaskStatus.SUCCESS,
@@ -86,6 +96,7 @@ def successful_result(task: MedicalResearchTask) -> ResearchTaskResult:
 
 
 def test_host_materializes_stable_task_ids_and_deterministic_legacy_text() -> None:
+    """Protect stable host identity, fallback identity, and deterministic task rendering."""
     call = {"name": "ConductResearch", "id": "call-123", "args": task_args("Q")}
     first, call_id = runtime.materialize_medical_research_task(call, 2, 1)
     second, _ = runtime.materialize_medical_research_task(call, 2, 1)
@@ -103,6 +114,7 @@ def test_host_materializes_stable_task_ids_and_deterministic_legacy_text() -> No
 
 
 def test_distinct_tool_call_ids_have_distinct_injective_task_ids() -> None:
+    """Guard against lossy encoding collisions between distinct provider call IDs."""
     first, first_call_id = runtime.materialize_medical_research_task(
         {"name": "ConductResearch", "id": "call a", "args": task_args("Q")},
         1,
@@ -125,6 +137,7 @@ def test_distinct_tool_call_ids_have_distinct_injective_task_ids() -> None:
 async def test_write_research_brief_dual_writes_one_structured_source(
     monkeypatch,
 ) -> None:
+    """Ensure one typed Brief is the source for both structured and legacy views."""
     brief = MedicalResearchBrief(
         normalized_question="Compare treatment A and treatment B in adults.",
         question_type="treatment comparison",
@@ -151,7 +164,11 @@ async def test_write_research_brief_dual_writes_one_structured_source(
 async def test_supervisor_tools_preserves_success_and_isolates_child_failure(
     monkeypatch,
 ) -> None:
+    """Keep concurrent task success while mapping one child exception to FAILED."""
+
     class FakeResearcherSubgraph:
+        """Return task-correlated success or raise a deterministic child failure."""
+
         async def ainvoke(self, state, _config):
             task = state["task"]
             if "fails" in task.research_question:
@@ -201,7 +218,11 @@ async def test_supervisor_tools_preserves_success_and_isolates_child_failure(
 async def test_supervisor_tools_materializes_overflow_as_failed_result(
     monkeypatch,
 ) -> None:
+    """Ensure every materialized but unadmitted task receives a FAILED result."""
+
     class FakeResearcherSubgraph:
+        """Return a successful result for every admitted task."""
+
         async def ainvoke(self, state, _config):
             result = successful_result(state["task"])
             return {
@@ -235,6 +256,7 @@ async def test_supervisor_tools_materializes_overflow_as_failed_result(
 
 @pytest.mark.asyncio
 async def test_supervisor_can_finish_without_materializing_a_task() -> None:
+    """Preserve the Supervisor's zero-delegation completion path."""
     command = await runtime.supervisor_tools(
         {
             "supervisor_messages": [AIMessage(content="Research is sufficient")],
@@ -253,6 +275,7 @@ async def test_supervisor_can_finish_without_materializing_a_task() -> None:
 async def test_compression_returns_partial_shadow_result_and_legacy_output(
     monkeypatch,
 ) -> None:
+    """Keep PARTIAL structured and legacy outputs aligned to one execution."""
     monkeypatch.setattr(runtime, "configurable_model", FakeModel(AIMessage(content="Summary")))
     task = MedicalResearchTask(
         task_id="task:call-1",
@@ -284,6 +307,7 @@ async def test_compression_returns_partial_shadow_result_and_legacy_output(
 async def test_compression_failure_preserves_structured_artifacts_and_legacy_error(
     monkeypatch,
 ) -> None:
+    """Prevent compression failure from erasing materialized provenance references."""
     monkeypatch.setattr(runtime, "configurable_model", FailingModel(None))
     task = MedicalResearchTask(
         task_id="task:call-1",
@@ -336,6 +360,7 @@ async def test_compression_failure_preserves_structured_artifacts_and_legacy_err
 
 @pytest.mark.asyncio
 async def test_no_tool_calls_maps_to_success_termination() -> None:
+    """Map normal no-call Researcher termination to operational SUCCESS."""
     command = await runtime.researcher_tools(
         {
             "researcher_messages": [AIMessage(content="Done")],
@@ -350,6 +375,7 @@ async def test_no_tool_calls_maps_to_success_termination() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_budget_boundary_maps_to_partial_termination(monkeypatch) -> None:
+    """Map budget-forced termination to PARTIAL when no completion signal exists."""
     monkeypatch.setattr(runtime, "get_all_tools", local_researcher_tools)
     command = await runtime.researcher_tools(
         {
@@ -376,6 +402,7 @@ async def test_tool_budget_boundary_maps_to_partial_termination(monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_explicit_research_complete_precedes_budget_boundary(monkeypatch) -> None:
+    """Give explicit ResearchComplete precedence at the tool-budget boundary."""
     monkeypatch.setattr(runtime, "get_all_tools", local_researcher_tools)
     command = await runtime.researcher_tools(
         {
@@ -404,6 +431,7 @@ async def test_explicit_research_complete_precedes_budget_boundary(monkeypatch) 
 async def test_tool_execution_error_downgrades_shadow_result_to_partial(
     monkeypatch,
 ) -> None:
+    """Expose a recognized tool failure as PARTIAL rather than verified success."""
     monkeypatch.setattr(runtime, "configurable_model", FakeModel(AIMessage(content="Summary")))
     task = MedicalResearchTask(
         task_id="task:call-1",
@@ -436,6 +464,7 @@ async def test_tool_execution_error_downgrades_shadow_result_to_partial(
 
 @pytest.mark.asyncio
 async def test_compiled_researcher_crosses_task_result_boundary(monkeypatch) -> None:
+    """Verify the compiled subgraph exposes Result and hides Researcher process state."""
     monkeypatch.setattr(runtime, "configurable_model", FakeModel(AIMessage(content="Summary")))
     task = MedicalResearchTask(
         task_id="task:compiled-1",

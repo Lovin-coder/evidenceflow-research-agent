@@ -20,6 +20,7 @@ from open_deep_research.state import (
 
 
 def result(task_id: str, summary: str = "Summary") -> ResearchTaskResult:
+    """Build a minimal immutable result for reducer tests."""
     return ResearchTaskResult(
         task_id=task_id,
         status=ResearchTaskStatus.SUCCESS,
@@ -33,6 +34,7 @@ def result(task_id: str, summary: str = "Summary") -> ResearchTaskResult:
 
 
 def test_research_results_append_deduplicate_and_reject_conflicts() -> None:
+    """Verify result replay is idempotent while conflicting payloads fail."""
     first = result("task:1")
     second = result("task:2")
 
@@ -43,6 +45,7 @@ def test_research_results_append_deduplicate_and_reject_conflicts() -> None:
 
 
 def test_source_and_evidence_reducers_use_stable_identity() -> None:
+    """Protect identity-based deduplication for Source and Evidence channels."""
     source = SourceRecord(
         source_id="source-1",
         artifact_ref=None,
@@ -72,6 +75,7 @@ def test_source_and_evidence_reducers_use_stable_identity() -> None:
 
 
 def test_state_channels_expose_structured_and_legacy_contracts() -> None:
+    """Ensure structured contracts coexist with the frozen legacy state path."""
     assert {
         "medical_research_brief",
         "research_brief",
@@ -93,10 +97,12 @@ def test_state_channels_expose_structured_and_legacy_contracts() -> None:
 
 
 def _edges(graph) -> set[tuple[str, str]]:
+    """Return graph edges in a deterministic comparison-friendly form."""
     return {(edge.source, edge.target) for edge in graph.get_graph().edges}
 
 
 def test_graph_topology_matches_frozen_supervisor_researcher_loop() -> None:
+    """Guard against accidental changes to the frozen Supervisor-Researcher topology."""
     assert _edges(deep_researcher) == {
         ("__start__", "clarify_with_user"),
         ("clarify_with_user", "__end__"),
@@ -121,6 +127,7 @@ def test_graph_topology_matches_frozen_supervisor_researcher_loop() -> None:
 
 
 def test_evidence_need_remains_nested_without_a_graph_channel() -> None:
+    """Ensure EvidenceNeed remains nested domain data rather than a graph stage."""
     need = EvidenceNeed(evidence_types=["clinical outcomes"])
     assert need.evidence_types == ["clinical outcomes"]
     assert "evidence_need" not in deep_researcher.channels

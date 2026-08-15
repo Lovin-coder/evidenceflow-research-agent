@@ -19,6 +19,7 @@ from open_deep_research.domain_models import (
 
 
 def evidence_need() -> EvidenceNeed:
+    """Build a representative nested evidence-planning requirement."""
     return EvidenceNeed(
         evidence_types=["comparative clinical outcomes"],
         study_types=["randomized trials"],
@@ -27,6 +28,7 @@ def evidence_need() -> EvidenceNeed:
 
 
 def task() -> MedicalResearchTask:
+    """Build a stable task shared by provenance contract tests."""
     return MedicalResearchTask(
         task_id="task:call-1",
         research_question="How do the treatments compare?",
@@ -37,6 +39,7 @@ def task() -> MedicalResearchTask:
 
 
 def test_contract_version_and_open_medical_vocabulary() -> None:
+    """Keep the v1 identifier stable without freezing a medical taxonomy."""
     brief = MedicalResearchBrief(
         normalized_question="What evidence supports the treatment?",
         question_type="locally-defined emerging clinical category",
@@ -51,6 +54,7 @@ def test_contract_version_and_open_medical_vocabulary() -> None:
 
 
 def test_result_serializes_discoverable_contract_version() -> None:
+    """Ensure cross-graph results expose and enforce their wire-contract version."""
     result = ResearchTaskResult(
         task_id="task:call-1",
         status=ResearchTaskStatus.SUCCESS,
@@ -78,6 +82,7 @@ def test_result_serializes_discoverable_contract_version() -> None:
 
 
 def test_contracts_are_strict_and_forbid_extra_fields() -> None:
+    """Prevent silent schema drift or coercion at frozen contract boundaries."""
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         MedicalResearchTask(
             task_id="task:call-1",
@@ -99,11 +104,13 @@ def test_contracts_are_strict_and_forbid_extra_fields() -> None:
 
 
 def test_evidence_need_requires_domain_semantics() -> None:
+    """Reject an empty EvidenceNeed that contributes no planning semantics."""
     with pytest.raises(ValidationError, match="at least one evidence requirement"):
         EvidenceNeed()
 
 
 def test_finding_requires_evidence_or_explicit_insufficiency() -> None:
+    """Keep unsupported findings explicit rather than presenting them as grounded."""
     with pytest.raises(ValidationError, match="evidence-insufficient"):
         ResearchFinding(
             finding_id="finding-1",
@@ -126,6 +133,7 @@ def test_finding_requires_evidence_or_explicit_insufficiency() -> None:
 
 
 def test_result_status_rules_and_wire_values() -> None:
+    """Protect operational status/error rules and their serialized enum values."""
     with pytest.raises(ValidationError, match="must include an error"):
         ResearchTaskResult(
             task_id="task:call-1",
@@ -152,6 +160,7 @@ def test_result_status_rules_and_wire_values() -> None:
 
 
 def test_provenance_graph_accepts_valid_references() -> None:
+    """Accept a fully resolvable Task-to-Source provenance graph."""
     source = SourceRecord(
         source_id="source-1",
         artifact_ref=None,
@@ -194,6 +203,7 @@ def test_provenance_graph_accepts_valid_references() -> None:
 
 
 def test_provenance_graph_rejects_invalid_source_and_evidence_references() -> None:
+    """Reject Evidence whose Source identity cannot be resolved."""
     orphan_evidence = EvidenceRecord(
         evidence_id="evidence-orphan",
         source_id="source-missing",
@@ -219,6 +229,7 @@ def test_provenance_graph_rejects_invalid_source_and_evidence_references() -> No
 
 
 def test_structured_records_reject_process_and_raw_artifact_payloads() -> None:
+    """Keep model messages and raw artifacts out of structured evidence channels."""
     with pytest.raises(ValidationError):
         EvidenceRecord(
             evidence_id="evidence-1",
@@ -237,6 +248,7 @@ def test_structured_records_reject_process_and_raw_artifact_payloads() -> None:
 
 
 def test_provenance_graph_requires_sources_used_by_result_evidence() -> None:
+    """Require every result-level Evidence reference to retain its Source identity."""
     source = SourceRecord(
         source_id="source-1",
         artifact_ref=None,
@@ -267,6 +279,7 @@ def test_provenance_graph_requires_sources_used_by_result_evidence() -> None:
 
 
 def test_result_rejects_finding_from_another_task() -> None:
+    """Prevent a result from adopting Findings produced for another task."""
     finding = ResearchFinding(
         finding_id="finding-1",
         task_id="task:other",
