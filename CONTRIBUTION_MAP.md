@@ -5,9 +5,10 @@
 | Field | Value |
 |---|---|
 | Status | **Living Contribution Ledger** |
-| Snapshot date | 2026-08-14 |
-| Current code baseline | `20aaa0d422bd290c83f93574810ef1244e8d5955` |
-| Current EvidenceFlow stage | P2-S3 design freeze candidate；implementation not started |
+| Snapshot date | 2026-08-15 |
+| Frozen upstream baseline | `20aaa0d422bd290c83f93574810ef1244e8d5955` |
+| Current repository HEAD | `4af35e38b0096a82522d86eb96be1a4cbda71e81`（baseline 后仅有 documentation commits） |
+| Current EvidenceFlow stage | P2-S3 implementation candidate；deterministic validation complete，real runtime smoke blocked，human review / commit pending |
 | Update rule | 每次设计冻结、代码提交、测试或实验完成后追加证据，不把 planned/design 写成 implemented |
 
 本文记录 open_deep_research upstream baseline 与 EvidenceFlow 原创设计、实现、测试和实验之间的边界。
@@ -45,7 +46,7 @@
 | Short commit | `20aaa0d` |
 | Commit subject | `Bump cryptography in the uv group across 1 directory (#331)` |
 | Local fork | `Lovin-coder/evidenceflow-research-agent` |
-| Verification | 当前 `HEAD` 与 frozen commit 完全一致；工作树只有未跟踪的 `docs/` 设计产物 |
+| Verification | 当前 committed `src/`/`tests/` 仍与 frozen commit 一致；HEAD 另含 documentation commits；P2-S3 runtime/test diff 当前位于未提交工作树 |
 
 Attribution rule：该 commit 已存在的 Agent topology、search、compression、final writer、state/reducer
 和 evaluation harness 均记为 `UPSTREAM`。EvidenceFlow 可以说明“复用并保留”这些机制，不能将其描述为
@@ -54,11 +55,11 @@ Attribution rule：该 commit 已存在的 Agent topology、search、compression
 
 Primary baseline evidence：
 
-- [`src/open_deep_research/state.py`](../src/open_deep_research/state.py)
-- [`src/open_deep_research/deep_researcher.py`](../src/open_deep_research/deep_researcher.py)
-- [`src/open_deep_research/utils.py`](../src/open_deep_research/utils.py)
-- [`tests/evaluators.py`](../tests/evaluators.py)
-- [`notes/p2_s2/closeout/P2_S2_CLOSEOUT.md`](../notes/p2_s2/closeout/P2_S2_CLOSEOUT.md)
+- [`src/open_deep_research/state.py`](src/open_deep_research/state.py)
+- [`src/open_deep_research/deep_researcher.py`](src/open_deep_research/deep_researcher.py)
+- [`src/open_deep_research/utils.py`](src/open_deep_research/utils.py)
+- [`tests/evaluators.py`](tests/evaluators.py)
+- [`notes/p2_s2/closeout/P2_S2_CLOSEOUT.md`](notes/p2_s2/closeout/P2_S2_CLOSEOUT.md)
 
 ## Baseline Capabilities
 
@@ -82,11 +83,11 @@ Baseline capability source map：
 
 | Baseline component | Primary implementation |
 |---|---|
-| Clarify / Brief / Supervisor / Researcher / Compression / Final Writer | [`deep_researcher.py`](../src/open_deep_research/deep_researcher.py) |
-| Baseline schemas and State | [`state.py`](../src/open_deep_research/state.py) |
-| Tavily, provider tools, webpage summarization, legacy notes extraction | [`utils.py`](../src/open_deep_research/utils.py) |
-| Final artifact and Groundedness evaluators | [`evaluators.py`](../tests/evaluators.py) |
-| Supervisor parallelism prototype | [`supervisor_parallel_evaluation.py`](../tests/supervisor_parallel_evaluation.py) |
+| Clarify / Brief / Supervisor / Researcher / Compression / Final Writer | [`deep_researcher.py`](src/open_deep_research/deep_researcher.py) |
+| Baseline schemas and State | [`state.py`](src/open_deep_research/state.py) |
+| Tavily, provider tools, webpage summarization, legacy notes extraction | [`utils.py`](src/open_deep_research/utils.py) |
+| Final artifact and Groundedness evaluators | [`evaluators.py`](tests/evaluators.py) |
+| Supervisor parallelism prototype | [`supervisor_parallel_evaluation.py`](tests/supervisor_parallel_evaluation.py) |
 
 ## EvidenceFlow Original Work
 
@@ -94,10 +95,10 @@ Baseline capability source map：
 
 | Contribution ID | Original contribution | Status | Evidence |
 |---|---|---|---|
-| `EF-DES-001` | 将 baseline 限制收敛为 Task/Runtime Explicitness、Text-centric Evidence、Evaluation Granularity、Domain Adaptation 四类 | `DESIGNED` | [Master Plan §3](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#3-four-baseline-limitation-categories) |
-| `EF-DES-002` | 定义三个核心 Track：Domain-aware Medical Planning、Evidence-native Research Pipeline、Claim-level Grounding/Evaluation | `DESIGNED` | [Master Plan §5](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#5-three-improvement-tracks) |
-| `EF-DES-003` | 决定首版保留 Agentic Supervisor–Researcher Tool Loop，不迁移 Plan + Send、RAG 或 Durable Queue | `DESIGNED` | [Master Plan §5/§10](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#5-three-improvement-tracks) |
-| `EF-DES-004` | 将 P2-S3～P2-S6 拆为 contracts、evidence-native researcher、claim grounding、evaluation/reliability 四阶段 | `DESIGNED` | [Master Plan §11](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#11-p2-s3p2-s6-roadmap) |
+| `EF-DES-001` | 将 baseline 限制收敛为 Task/Runtime Explicitness、Text-centric Evidence、Evaluation Granularity、Domain Adaptation 四类 | `DESIGNED` | [Master Plan §3](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#3-four-baseline-limitation-categories) |
+| `EF-DES-002` | 定义三个核心 Track：Domain-aware Medical Planning、Evidence-native Research Pipeline、Claim-level Grounding/Evaluation | `DESIGNED` | [Master Plan §5](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#5-three-improvement-tracks) |
+| `EF-DES-003` | 决定首版保留 Agentic Supervisor–Researcher Tool Loop，不迁移 Plan + Send、RAG 或 Durable Queue | `DESIGNED` | [Master Plan §5/§10](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#5-three-improvement-tracks) |
+| `EF-DES-004` | 将 P2-S3～P2-S6 拆为 contracts、evidence-native researcher、claim grounding、evaluation/reliability 四阶段 | `DESIGNED` | [Master Plan §11](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#11-p2-s3p2-s6-roadmap) |
 
 这些条目证明的是 architecture/design work，不证明相关 runtime 已经实现。
 
@@ -105,26 +106,27 @@ Baseline capability source map：
 
 | Contribution ID | Original contribution | Status | Evidence |
 |---|---|---|---|
-| `EF-VER-001` | 对 frozen upstream 的主图、Supervisor、Researcher、并发、Compression 和 State 数据流做源码级核验 | `VERIFIED` | [`notes/p2_s2/source/`](../notes/p2_s2/source/)；[`P2_S2_CLOSEOUT.md`](../notes/p2_s2/closeout/P2_S2_CLOSEOUT.md) |
-| `EF-VER-002` | 核验 `notes` 与 `raw_notes` 是不同路径，Final Writer 主要消费 `notes` | `VERIFIED` | [`04_supervisor_researcher_deep_dive.md`](../notes/p2_s2/source/04_supervisor_researcher_deep_dive.md) |
-| `EF-VER-003` | 定位现有 Groundedness 使用混合 `raw_notes`、存在 AIMessage 循环自证与粒度不足的问题 | `VERIFIED` | [`07_evaluation_harness.md`](../notes/p2_s2/source/07_evaluation_harness.md)；[`groundedness_evidence_harness.md`](../notes/p2_s2/improvements/groundedness_evidence_harness.md) |
+| `EF-VER-001` | 对 frozen upstream 的主图、Supervisor、Researcher、并发、Compression 和 State 数据流做源码级核验 | `VERIFIED` | [`notes/p2_s2/source/`](notes/p2_s2/source/)；[`P2_S2_CLOSEOUT.md`](notes/p2_s2/closeout/P2_S2_CLOSEOUT.md) |
+| `EF-VER-002` | 核验 `notes` 与 `raw_notes` 是不同路径，Final Writer 主要消费 `notes` | `VERIFIED` | [`04_supervisor_researcher_deep_dive.md`](notes/p2_s2/source/04_supervisor_researcher_deep_dive.md) |
+| `EF-VER-003` | 定位现有 Groundedness 使用混合 `raw_notes`、存在 AIMessage 循环自证与粒度不足的问题 | `VERIFIED` | [`07_evaluation_harness.md`](notes/p2_s2/source/07_evaluation_harness.md)；[`groundedness_evidence_harness.md`](notes/p2_s2/improvements/groundedness_evidence_harness.md) |
 
 ### P2-S3 — Domain & Evidence Contracts
 
-P2-S3 当前状态：`DESIGNED / FREEZE CANDIDATE`，尚无 `src/` 或 `tests/` 实现 diff。
+P2-S3 当前状态：设计已同步，runtime 和 deterministic tests 已在工作树实现；在完成真实 runtime smoke、
+human core diff review 和 closeout commit 前，正式状态仍不升级为 `IMPLEMENTED/VALIDATED`。
 
-| Contribution ID | Original contribution | Frozen design outcome | Status | Evidence |
+| Contribution ID | Original contribution | Current outcome | Status | Evidence |
 |---|---|---|---|---|
-| `EF-P2S3-001` | Medical planning contract | 用 `MedicalResearchBrief` 聚合 normalized question、question type、clinical elements/PICO、constraints、intent 和 nested evidence needs | `DESIGNED` | [Contracts §3.1–3.2](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#31-medicalresearchbrief) |
-| `EF-P2S3-002` | EvidenceNeed placement | 保留 EvidenceNeed 领域语义，但不新增独立 Graph Stage | `DESIGNED` | [Contracts §3.2](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#32-evidenceneed) |
-| `EF-P2S3-003` | Domain task contract | 定义具有 stable `task_id` 的 `MedicalResearchTask`，与 runtime `tool_call_id` 分离 | `DESIGNED` | [Contracts §3.3](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#33-medicalresearchtask) |
-| `EF-P2S3-004` | Evidence data chain | 冻结最小 `SourceRecord`、`EvidenceRecord` 和 `ResearchFinding` 职责与字段 | `DESIGNED` | [Contracts §3.4–3.6](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#34-sourcerecord) |
-| `EF-P2S3-005` | Cross-graph output | 新增 topology-neutral `ResearchTaskResult`，使 Parent 不依赖完整 ResearcherState | `DESIGNED` | [Contracts §3.7/§5](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#37-researchtaskresult) |
-| `EF-P2S3-006` | State schema | 冻结 Parent、Supervisor、Researcher-local 的逻辑 State ownership 和最小 channel | `DESIGNED` | [Contracts §4](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#4-state-boundaries) |
-| `EF-P2S3-007` | Artifact boundary | 禁止 Graph State 持久化完整 HTML/PDF、binary、完整大型 provider payload 或 immutable snapshots | `DESIGNED` | [Contracts §4.4](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#44-artifact-boundary) |
-| `EF-P2S3-008` | Identity/provenance rules | 冻结 I1–I8：stable IDs、引用可解析、AIMessage 非 Evidence、locator+hash 可审计、跨图隔离和 dual-write | `DESIGNED` | [Contracts §6](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#6-identity--provenance-invariants) |
-| `EF-P2S3-009` | Concurrent update semantics | 冻结 replace、append/merge、append/dedup 业务语义，禁止并发 ResearchTaskResult whole-channel overwrite | `DESIGNED` | [Contracts §7](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#7-reducer--update-semantics) |
-| `EF-P2S3-010` | Migration/versioning | 定义 legacy dual-write、breaking changes、contract version 和 deferred contracts | `DESIGNED` | [Contracts §8–§10](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#8-legacy-compatibility) |
+| `EF-P2S3-001` | Medical planning contract | 严格 `MedicalResearchBrief` schema 已实现；runtime 直接 structured-output，并由 host renderer dual-write legacy brief | `DESIGNED` + worktree implementation | [Contracts §3.1–3.2](docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md#31-medicalresearchbrief)；[`domain_models.py`](src/open_deep_research/domain_models.py)；[`write_research_brief`](src/open_deep_research/deep_researcher.py) |
+| `EF-P2S3-002` | EvidenceNeed placement | `EvidenceNeed` 仅作为 Brief/Task nested object；topology regression test 确认没有独立 channel/node | `DESIGNED` + worktree implementation | [`domain_models.py`](src/open_deep_research/domain_models.py)；[`test_state_contracts.py`](tests/test_state_contracts.py) |
+| `EF-P2S3-003` | Domain task contract | Host 从 structured `ConductResearch` envelope 构造 run-local Task ID，并保持 Supervisor 0/1/N 动态 delegation | `DESIGNED` + worktree implementation | [`state.py`](src/open_deep_research/state.py)；[`materialize_medical_research_task`](src/open_deep_research/deep_researcher.py)；[`test_p2_s3_runtime.py`](tests/test_p2_s3_runtime.py) |
+| `EF-P2S3-004` | Evidence data chain | 严格 Source/Evidence/Finding schemas、raw-metadata guard 和 cross-record provenance validator 已实现；runtime population 延后 P2-S4 | `DESIGNED` + worktree implementation | [`domain_models.py`](src/open_deep_research/domain_models.py)；[`test_domain_models.py`](tests/test_domain_models.py) |
+| `EF-P2S3-005` | Cross-graph output | Researcher runtime dual-write shadow `ResearchTaskResult` 与 legacy compression；admission/execution failure 均产生 task-correlated failed result | `DESIGNED` + worktree implementation | [`compress_research`/`supervisor_tools`](src/open_deep_research/deep_researcher.py)；[`test_p2_s3_runtime.py`](tests/test_p2_s3_runtime.py) |
+| `EF-P2S3-006` | State schema | Parent/Supervisor/Researcher structured channels 已映射；Researcher output 只投影 Result 和 legacy outputs | `DESIGNED` + worktree implementation | [`state.py`](src/open_deep_research/state.py)；[`test_state_contracts.py`](tests/test_state_contracts.py) |
+| `EF-P2S3-007` | Artifact boundary | 新 structured contracts 拒绝已知 raw payload metadata 和 process-message excerpt；legacy raw-notes fallback 作为 P2-S3 临时例外 | `DESIGNED` + worktree validation | [Contracts §4.4](docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md#44-artifact-boundary)；[`test_domain_models.py`](tests/test_domain_models.py) |
+| `EF-P2S3-008` | Identity/provenance rules | I1–I10 已同步；ID、Source/Evidence/Finding reference、process-artifact rejection 和 derived-field exclusion 有 deterministic tests | `DESIGNED` + worktree validation | [Contracts §6](docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md#6-identity--provenance-invariants)；[`test_domain_models.py`](tests/test_domain_models.py) |
+| `EF-P2S3-009` | Concurrent update semantics | ID-aware reducers 保留 distinct results，dedup identical replay，并拒绝相同 ID 的 conflicting payload | `DESIGNED` + worktree validation | [`state.py`](src/open_deep_research/state.py)；[`test_state_contracts.py`](tests/test_state_contracts.py) |
+| `EF-P2S3-010` | Migration/versioning | contract constant、deterministic Markdown adapters、structured+legacy 同执行 dual-write 和迁移例外已实现并记录 | `DESIGNED` + worktree validation | [`domain_models.py`](src/open_deep_research/domain_models.py)；[`deep_researcher.py`](src/open_deep_research/deep_researcher.py)；[Contracts §8–§10](docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md#8-legacy-compatibility) |
 
 ### P2-S4 — Evidence-native Researcher
 
@@ -133,11 +135,11 @@ P2-S4 当前状态：`PLANNED`。以下是已在 Master Plan/Contracts 中划定
 
 | Contribution ID | Planned EvidenceFlow work | Intended outcome | Status | Design evidence |
 |---|---|---|---|---|
-| `EF-P2S4-001` | Tavily structured ingestion | 将 formatted search text 同步投影为 SourceRecord/EvidenceRecord，保留 stable IDs 与 provenance | `PLANNED` | [Master Plan §5 Track B](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#track-b--evidence-native-research-pipeline) |
-| `EF-P2S4-002` | Evidence-native Researcher output | Researcher 生成 ResearchFinding 和 ResearchTaskResult，Supervisor 消费 bounded structured result | `PLANNED` | [Contracts §3.6–§5](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#36-researchfinding) |
-| `EF-P2S4-003` | Provenance through compression | Source/Evidence IDs 穿过 compression 和 Supervisor observation boundary | `PLANNED` | [Contracts I1–I8](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#6-identity--provenance-invariants) |
-| `EF-P2S4-004` | Legacy dual-write | structured ledger 与 `raw_notes`/`notes`/`compressed_research` 并存，旧报告继续生成 | `PLANNED` | [Contracts §8](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#8-legacy-compatibility) |
-| `EF-P2S4-005` | Minimal Artifact Store | 实现 `ArtifactStore Protocol → LocalArtifactStore`；Graph State 只保留 opaque `artifact_ref` | `PLANNED` | [Contracts §4.4/§10](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md#44-artifact-boundary) |
+| `EF-P2S4-001` | Tavily structured ingestion | 将 formatted search text 同步投影为 SourceRecord/EvidenceRecord，保留 stable IDs 与 provenance | `PLANNED` | [Master Plan §5 Track B](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#track-b--evidence-native-research-pipeline) |
+| `EF-P2S4-002` | Evidence-native Result population | 在 P2-S3 shadow Result boundary 中填入实际 ResearchFinding、Evidence IDs 和 Source IDs | `PLANNED` | [Contracts §3.6–§5](docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md#36-researchfinding) |
+| `EF-P2S4-003` | Provenance through compression | Source/Evidence IDs 穿过 compression 和 Supervisor observation boundary | `PLANNED` | [Contracts I1–I10](docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md#6-identity--provenance-invariants) |
+| `EF-P2S4-004` | Evidence-native dual-write | 在已实现的 shadow/legacy adapter 上增加实际 structured ledger population，旧报告继续生成 | `PLANNED` | [Contracts §8](docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md#8-legacy-compatibility) |
+| `EF-P2S4-005` | Minimal Artifact Store | 实现 `ArtifactStore Protocol → LocalArtifactStore`，移除 P2-S3 legacy raw-content exception | `PLANNED` | [Contracts §4.4/§10](docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md#44-artifact-boundary) |
 
 ### P2-S5 — Claim–Evidence Grounding
 
@@ -145,64 +147,67 @@ P2-S5 当前状态：`PLANNED`。P2-S3 只保留完整目标链中的位置，�
 
 | Contribution ID | Planned EvidenceFlow work | Intended outcome | Status | Design evidence |
 |---|---|---|---|---|
-| `EF-P2S5-001` | Claim contracts | 冻结 ClaimRecord、EvidenceSupport/ClaimEvidenceLink 和 Citation representation | `PLANNED` | [Master Plan §7/§11](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#7-key-domain-contracts) |
-| `EF-P2S5-002` | Groundedness V2 | 分离 Claim Extraction、deterministic Citation Resolution、Entailment、Materiality Aggregation | `PLANNED` | [Master Plan Track C](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#track-c--claim-level-grounding--evaluation) |
-| `EF-P2S5-003` | Metric separation | 独立衡量 Claim Groundedness、Citation Correctness、Citation Completeness 和 Factual Correctness | `PLANNED` | [Master Plan Track C](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#track-c--claim-level-grounding--evaluation) |
-| `EF-P2S5-004` | Shadow comparison | Groundedness V1/V2 并行评估，保留旧 evaluator 作为对照 | `PLANNED` | [Master Plan §11](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#11-p2-s3p2-s6-roadmap) |
+| `EF-P2S5-001` | Claim contracts | 冻结 ClaimRecord、EvidenceSupport/ClaimEvidenceLink 和 Citation representation | `PLANNED` | [Master Plan §7/§11](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#7-key-domain-contracts) |
+| `EF-P2S5-002` | Groundedness V2 | 分离 Claim Extraction、deterministic Citation Resolution、Entailment、Materiality Aggregation | `PLANNED` | [Master Plan Track C](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#track-c--claim-level-grounding--evaluation) |
+| `EF-P2S5-003` | Metric separation | 独立衡量 Claim Groundedness、Citation Correctness、Citation Completeness 和 Factual Correctness | `PLANNED` | [Master Plan Track C](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#track-c--claim-level-grounding--evaluation) |
+| `EF-P2S5-004` | Shadow comparison | Groundedness V1/V2 并行评估，保留旧 evaluator 作为对照 | `PLANNED` | [Master Plan §11](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#11-p2-s3p2-s6-roadmap) |
 
 ### P2-S6 — Evaluation & Reliability
 
 | Contribution ID | Planned EvidenceFlow work | Intended outcome | Status | Design evidence |
 |---|---|---|---|---|
-| `EF-P2S6-001` | Frozen regression fixtures | 对 contract、citation、support/contradiction 和 failure cases 做可重复回归 | `PLANNED` | [Master Plan §9/§11](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#9-mvp-scope) |
-| `EF-P2S6-002` | Judge calibration / hard gates | 基于人工校准数据确定阈值，不在设计阶段臆定 release threshold | `PLANNED` | [Master Plan §12/§13](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#12-acceptance-criteria) |
-| `EF-P2S6-003` | Partial-failure observability | 在既有三条 Track 内改善 per-task result/error 的可见性 | `PLANNED` | [Master Plan §11](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#11-p2-s3p2-s6-roadmap) |
+| `EF-P2S6-001` | Frozen regression fixtures | 对 contract、citation、support/contradiction 和 failure cases 做可重复回归 | `PLANNED` | [Master Plan §9/§11](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#9-mvp-scope) |
+| `EF-P2S6-002` | Judge calibration / hard gates | 基于人工校准数据确定阈值，不在设计阶段臆定 release threshold | `PLANNED` | [Master Plan §12/§13](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#12-acceptance-criteria) |
+| `EF-P2S6-003` | Partial-failure observability | 在既有三条 Track 内改善 per-task result/error 的可见性 | `PLANNED` | [Master Plan §11](docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md#11-p2-s3p2-s6-roadmap) |
 
 ## Modified Upstream Components
 
 ### Current Actual Modifications
 
-截至本快照，`src/` 与 `tests/` 相对 frozen upstream commit 没有修改。不能声称已经实现 domain contracts、
-evidence-native researcher、Artifact Store 或 Claim Grounding。
+截至本快照，P2-S3 已产生可定位的 runtime 和 test diff，但尚未完成真实 smoke、人工核心 diff 审阅与
+closeout commit。因此下表证明“工作树中已有实现候选并通过 deterministic validation”，不把它提前写成
+已提交或已完成阶段。
 
-当前原创文件只有设计/归属文档，且尚未进入 Git commit：
-
-| File | Contribution | Status | Commit / PR |
-|---|---|---|---|
-| [`docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md`](application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md) | Improvement Master Plan、三条 Track、phase boundary、MVP/non-goals | `DESIGNED` | `UNCOMMITTED` |
-| [`docs/evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md`](evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md) | P2-S3 domain/state/boundary/invariant/reducer contracts | `DESIGNED` | `UNCOMMITTED` |
-| [`docs/CONTRIBUTION_MAP.md`](CONTRIBUTION_MAP.md) | Upstream attribution 与 claim-to-evidence ledger | `DESIGNED` | `UNCOMMITTED` |
+| File | Baseline responsibility | EvidenceFlow modification | Reason | Evidence state |
+|---|---|---|---|---|
+| [`domain_models.py`](src/open_deep_research/domain_models.py) | upstream 无领域合同模块 | 新增七个 v1 contracts、status enum、contract version、raw-artifact guard 和 provenance graph validator | 将领域对象与 LangGraph process State 分离 | `WORKTREE`; schema tests pass |
+| [`state.py`](src/open_deep_research/state.py) | generic tool schemas 与 Parent/Supervisor/Researcher State | structured ConductResearch envelope、typed channels、TaskResult output、ID-aware reducers | 最小映射 frozen State/update semantics | `WORKTREE`; reducer/topology tests pass |
+| [`deep_researcher.py`](src/open_deep_research/deep_researcher.py) | brief、delegation、Researcher loop、compression、final writer | typed brief/task/result wiring、host IDs、deterministic legacy rendering、per-task failure isolation | 建立真实 Task → Result boundary且保留原拓扑 | `WORKTREE`; mocked runtime tests pass |
+| [`prompts.py`](src/open_deep_research/prompts.py) | generic brief/Supervisor/Researcher prompts | 对齐 MedicalResearchBrief 和 structured delegation semantics | 防止 prompt/schema drift | `WORKTREE`; Ruff pass |
+| [`test_domain_models.py`](tests/test_domain_models.py) | 无 deterministic contract tests | strict schema、status、provenance、raw/process artifact rejection tests | 将 I1–I10 转成可回归检查 | `WORKTREE`; pass |
+| [`test_state_contracts.py`](tests/test_state_contracts.py) | 无 deterministic State tests | reducer replay/conflict、channel 和 frozen topology tests | 验证 State freeze 未改拓扑 | `WORKTREE`; pass |
+| [`test_p2_s3_runtime.py`](tests/test_p2_s3_runtime.py) | 无 deterministic runtime contract tests | brief dual-write、task identity、0/1/N、failure isolation、shadow Result tests | 验证真实 adapter functions，不调用外部服务 | `WORKTREE`; pass |
 
 ### Planned Upstream Touchpoints
 
-下表是实现阶段的 traceability map，不代表文件已经修改。实际 diff 出现后，必须追加 commit、tests 和
-validation evidence；若最终选择新模块而非修改原文件，也要更新“实际落点”。
+下表同时保留已触达和后续计划，以便继续追踪 upstream responsibility；`WORKTREE` 仍需 commit 才能升级
+为正式 `IMPLEMENTED`。
 
 | Upstream file / component | Baseline responsibility | Planned EvidenceFlow modification | Reason | Phase | Current status |
 |---|---|---|---|---|---|
-| `src/open_deep_research/state.py` | 定义 ConductResearch、ResearchQuestion、Agent/Supervisor/Researcher State 和 legacy output | 引入或引用 v1 domain contracts；将 Parent/Supervisor/Researcher logical channels 映射到冻结 State semantics | 让 Task、Source、Evidence、Finding、TaskResult 成为一等公民，同时保留 legacy channels | P2-S3/P2-S4 | `PLANNED` |
-| `deep_researcher.py::write_research_brief` | 生成 generic `research_brief: str` | 生成 schema-valid MedicalResearchBrief，并 dual-write/适配旧 brief 文本 | 将医学语义从 prompt-only 文本升级为稳定 domain input | P2-S3 | `PLANNED` |
-| `deep_researcher.py::supervisor` | 根据 brief/messages 动态产生 ConductResearch calls | 让 delegation 携带 MedicalResearchTask；保留 Agentic re-planning 和现有 Tool Loop | 显式化 task identity/constraints，不破坏 upstream 拓扑 | P2-S3/P2-S4 | `PLANNED` |
-| `deep_researcher.py::supervisor_tools` | 限制并发、`gather()` Researcher、将 compressed text 包装成 ToolMessage、聚合 raw_notes | 将 Task 投影到 Researcher input，接收/merge ResearchTaskResult，并继续输出 legacy ToolMessage | 建立稳定 Parent ↔ Researcher contract，避免 Supervisor 依赖完整 ResearcherState | P2-S4 | `PLANNED` |
+| `src/open_deep_research/state.py` | 定义 ConductResearch、ResearchQuestion、Agent/Supervisor/Researcher State 和 legacy output | 引用 v1 domain contracts；将 Parent/Supervisor/Researcher logical channels 映射到冻结 State semantics | 让 Task、Source、Evidence、Finding、TaskResult 成为一等公民，同时保留 legacy channels | P2-S3 | `WORKTREE` |
+| `deep_researcher.py::write_research_brief` | 生成 generic `research_brief: str` | 生成 schema-valid MedicalResearchBrief，并由 deterministic renderer dual-write legacy brief | 将医学语义从 prompt-only 文本升级为稳定 domain input | P2-S3 | `WORKTREE` |
+| `deep_researcher.py::supervisor` | 根据 brief/messages 动态产生 ConductResearch calls | 继续原算法并绑定升级后的 structured tool schema；未修改 planning loop | 显式化 task semantics，不破坏 upstream agentic behavior | P2-S3 | `PRESERVED / WORKTREE SCHEMA` |
+| `deep_researcher.py::supervisor_tools` | 限制并发、`gather()` Researcher、将 compressed text 包装成 ToolMessage、聚合 raw_notes | Host materialize Task，接收/merge shadow TaskResult，隔离 per-task failure，并继续输出 legacy ToolMessage | 建立稳定 Parent ↔ Researcher contract，避免 Supervisor 依赖完整 ResearcherState | P2-S3 | `WORKTREE` |
 | `deep_researcher.py::researcher` / `researcher_tools` | 运行隔离 Model–Tool–Observation loop | 在 local state 中累积 SourceRecord、EvidenceRecord、ResearchFinding | 分离 Process Artifacts 与 Evidence Artifacts | P2-S4 | `PLANNED` |
-| `deep_researcher.py::compress_research` | 生成 compressed_research 和 raw_notes | 生成 ResearchTaskResult.summary/findings/IDs，同时 legacy dual-write | 让 provenance 穿过 compression，而不是只返回无身份文本 | P2-S4 | `PLANNED` |
+| `deep_researcher.py::compress_research` | 生成 compressed_research 和 raw_notes | P2-S3 生成 shadow TaskResult 并 legacy dual-write；P2-S4 再 population structured records | 先验证跨图合同，避免提前实现 Evidence extraction | P2-S3/P2-S4 | `WORKTREE / POPULATION PLANNED` |
 | `deep_researcher.py::final_report_generation` | 从 notes 生成最终报告 | P2-S4 shadow 消费 structured Findings；P2-S5 接入 Claim/Citation contracts | 降低对混合 legacy text 的依赖，并支持可审计引用 | P2-S4/P2-S5 | `PLANNED` |
 | `utils.py::tavily_search` / `tavily_search_async` | 调用 Tavily、按 URL 去重、总结网页、返回 formatted string | 增加 structured ingestion adapter，生成 Source/Evidence records 和 retrieval metadata；原文本路径保留 | Tavily 是首个 Evidence-native vertical slice 的已验证主路径 | P2-S4 | `PLANNED` |
 | `utils.py::summarize_webpage` | 将 raw page content 压缩为 summary/key excerpts，失败时回退原文 | 保证 summary 与 source-derived excerpt 分层，禁止大 raw fallback 进入 Graph State | 执行 Artifact boundary，避免完整 HTML/PDF 或大型 payload 污染 State | P2-S4 | `PLANNED` |
 | `utils.py::get_notes_from_tool_calls` | 收集所有 ToolMessage 内容作为 notes | 限定为 legacy compatibility；structured results 使用独立 contract/merge path | 避免把 reflection/error/任意 ToolMessage 当成 Evidence | P2-S4 | `PLANNED` |
-| `src/open_deep_research/prompts.py` | 定义 generic clarify、brief、Supervisor、Researcher、compression、writer prompts | 适配 MedicalResearchBrief/Task 和 structured Finding output，但 deterministic invariants 仍由代码执行 | Prompt 表达语义目标，不能替代 schema、ID resolution 或 reducer enforcement | P2-S3/P2-S4 | `PLANNED` |
+| `src/open_deep_research/prompts.py` | 定义 generic clarify、brief、Supervisor、Researcher、compression、writer prompts | P2-S3 适配 MedicalResearchBrief/Task；structured Finding prompt 延后 P2-S4；invariants 由代码执行 | Prompt 表达语义目标，不能替代 schema、ID resolution 或 reducer enforcement | P2-S3/P2-S4 | `WORKTREE / FINDING PLANNED` |
 | `tests/evaluators.py` | Final artifact eval；Groundedness 对 final_report + raw_notes 一次性判定 | 保留 V1，对照新增 Claim/Citation/Evidence-aware V2 pipeline | 拆分 Claim extraction、resolution、entailment、aggregation，消除粗粒度循环自证 | P2-S5 | `PLANNED` |
 | `tests/run_evaluate.py` | 运行现有 evaluator 集合 | 加入 frozen fixtures、V1/V2 shadow experiment 和有效配置记录 | 为“改善”提供可重复实验依据 | P2-S5/P2-S6 | `PLANNED` |
 | `tests/supervisor_parallel_evaluation.py` | 局部检查 Supervisor 产生的并发 Tool Calls 数量 | 作为 topology regression 保留，并补充 Task/Result merge contract tests | 确认 contract migration 未破坏 upstream agentic parallelism | P2-S4/P2-S6 | `PLANNED` |
 
 ### Planned New EvidenceFlow Components
 
-准确文件名和模块布局尚未冻结，因此这里记录职责，不虚构不存在的源码路径。
+已落地组件记录实际路径；其余条目继续只记录职责。
 
 | Planned component | Responsibility | Phase | Status | Required evidence before status upgrade |
 |---|---|---|---|---|
-| Domain contract module | 承载 MedicalResearchBrief、MedicalResearchTask、Source/Evidence/Finding/TaskResult schemas | P2-S3 | `PLANNED` | source path、schema tests、serialization/version tests、commit |
-| Contract fixtures/tests | 验证 I1–I8、invalid references、merge/dedup、artifact exclusion 和 legacy coexistence | P2-S3/P2-S4 | `PLANNED` | fixture version、test command、pass result、commit |
+| [`domain_models.py`](src/open_deep_research/domain_models.py) | 承载 MedicalResearchBrief、MedicalResearchTask、Source/Evidence/Finding/TaskResult schemas | P2-S3 | `WORKTREE` | schema/provenance tests 已通过；commit pending |
+| [`test_domain_models.py`](tests/test_domain_models.py)、[`test_state_contracts.py`](tests/test_state_contracts.py)、[`test_p2_s3_runtime.py`](tests/test_p2_s3_runtime.py) | 验证 I1–I10、invalid references、merge/dedup、artifact exclusion、topology、compiled Researcher boundary 和 legacy coexistence | P2-S3 | `WORKTREE` | 24 deterministic tests pass；commit pending |
 | Tavily structured adapter | 将 provider results 映射到 SourceRecord/EvidenceRecord | P2-S4 | `PLANNED` | source path、frozen provider fixtures、provenance tests |
 | ArtifactStore Protocol / LocalArtifactStore | 保存 raw artifacts，Graph State 只携带 opaque artifact_ref | P2-S4 | `PLANNED` | protocol tests、local round-trip test、State-size/artifact exclusion test |
 | Groundedness V2 components | Claim extraction、Citation resolution、entailment、materiality aggregation | P2-S5 | `PLANNED` | calibrated fixtures、deterministic resolver tests、V1/V2 run evidence |
@@ -234,18 +239,28 @@ validation evidence；若最终选择新模块而非修改原文件，也要更�
 | `CLAIM-007` | “我设计了 legacy text 与 structured evidence 的 dual-write 迁移，避免一次破坏现有报告链路。” | `DESIGNED` | Contracts §8、Master Plan §9 |
 | `CLAIM-008` | “我将 Claim/Citation 冻结推迟到 P2-S5，并把 Evidence Store/RAG 明确为 Future layer，控制首个 vertical slice 的范围。” | `DESIGNED` | Contracts §10、Master Plan §10–§11 |
 
+当前工作树还为下列未来 claim 提供了源码和 deterministic test 证据，但在 closeout commit 前不得把它们
+写入正式简历版本：
+
+- “我实现了严格的 EvidenceFlow v1 domain schemas 和 provenance validators。”
+- “我在不改变 Supervisor–Researcher topology 的前提下接通了 structured Brief、host-assigned Task 和
+  shadow TaskResult。”
+- “我实现了按 task identity 聚合、幂等 replay 和 conflicting replay rejection，并隔离并发 admission /
+  execution failures。”
+
 ### Claims Not Yet Supported
 
 在相应 contribution 升级为 `IMPLEMENTED` 或 `VALIDATED` 前，不得使用以下表述：
 
-- “我实现了 MedicalResearchBrief / MedicalResearchTask runtime。”
+- “我已经提交并完成了 MedicalResearchBrief / MedicalResearchTask runtime。”（当前仅 worktree）
 - “我实现了 evidence-native Tavily researcher。”
 - “我实现了 ArtifactStore / Evidence Store / RAG。”
 - “我实现了 Claim-level Groundedness V2。”
 - “我的方案提升了 groundedness、citation accuracy、coverage 或 reliability。”
 - “EvidenceFlow 已经支持生产级医学研究、完整 PubMed 或医学 RAG。”
 
-允许的替代表述是：“已完成设计 / contract freeze candidate，下一阶段实现并通过 frozen fixtures 验证。”
+当前允许的替代表述是：“已完成设计并形成通过 deterministic tests 的 implementation candidate；真实
+runtime smoke、人工 review 和 closeout commit 尚未完成。”
 
 ### Evidence Standard for Future Claims
 
@@ -265,8 +280,9 @@ validation evidence；若最终选择新模块而非修改原文件，也要更�
 | Date | Contribution ID | Change summary | Source files | Commit / PR | Tests / command | Eval / run artifact | Status |
 |---|---|---|---|---|---|---|---|
 | 2026-08-14 | `EF-DES-001`–`EF-DES-004` | Improvement Master Plan 整理与阶段边界收敛 | `docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md` | `UNCOMMITTED` | document structure checks | N/A | `DESIGNED` |
-| 2026-08-14 | `EF-P2S3-001`–`EF-P2S3-010` | Contracts v1：domain/state/boundary/invariants/reducers/compatibility/versioning | `docs/evidenceflow_contract/EVIDENCEFLOW_CONTRACTS_V1.md` | `UNCOMMITTED` | document structure checks | N/A | `DESIGNED` |
-| 2026-08-14 | Contribution ledger | 创建 upstream attribution 与 resume claim ledger | `docs/CONTRIBUTION_MAP.md` | `UNCOMMITTED` | document structure checks | N/A | `DESIGNED` |
+| 2026-08-14 | `EF-P2S3-001`–`EF-P2S3-010` | Contracts v1：domain/state/boundary/invariants/reducers/compatibility/versioning | `docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md` | `b944aa6` + worktree sync | document review | N/A | `DESIGNED` |
+| 2026-08-15 | `EF-P2S3-001`–`EF-P2S3-010` | strict domain models、State reducers、structured Brief/Task/shadow Result、legacy adapters、failure isolation | `src/open_deep_research/domain_models.py`; `state.py`; `deep_researcher.py`; `prompts.py`; `tests/test_*contract*`; `tests/test_p2_s3_runtime.py` | `UNCOMMITTED WORKTREE` | targeted `pytest`: 24 passed；Ruff pass；targeted mypy pass；bare repo pytest additionally hits pre-existing legacy option error | external endpoint timed out before Brief; no search call | `DESIGNED` + implementation candidate |
+| 2026-08-14 | Contribution ledger | 创建并更新 upstream attribution 与 resume claim ledger | `CONTRIBUTION_MAP.md` | `4af35e3` + worktree sync | document review | N/A | `DESIGNED` |
 
 ## Maintenance Rules
 
@@ -286,3 +302,4 @@ validation evidence；若最终选择新模块而非修改原文件，也要更�
 | Date | Change |
 |---|---|
 | 2026-08-14 | 初始化 frozen upstream baseline、capability attribution、P2-S3～P2-S6 contribution、planned touchpoints 和 claim ledger |
+| 2026-08-15 | 记录 P2-S3 implementation candidate、deterministic validation、legacy raw-artifact exception 和 blocked runtime smoke |
