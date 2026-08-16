@@ -516,7 +516,8 @@ Evidence sufficiency、Evidence quality、coverage、grounding 或医学正确�
 - `PARTIAL`：Researcher 因 tool-call budget 或已识别的 tool failure 被迫终止，但仍成功产生可使用的
   partial result output。
 - `FAILED`：task 因 admission、child execution 或 compression failure 未能正常完成 result boundary；
-  已经 materialize 的可用 Source/Evidence/Finding references 仍必须保留。
+  finalization/failure boundary 已经能够取得且通过 validation 的可用 Source/Evidence/Finding references
+  仍必须保留。hard child exception 在 State 返回前的 recovery limitation 由 C-13 进一步收窄。
 
 `SUCCESS` 可以在 P2-S3 shadow Result 的 structured collections 为空时出现，因此不得将它解释为
 Evidence-native quality verification 已经通过。
@@ -630,3 +631,244 @@ module 的情况下识别 wire contract，同时避免在尚未进入 persistenc
 
 - `docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md`
 - `docs/plans/P2_S3.md`
+
+---
+
+# 5. Clarification Round 4 — Accepted Review Triage
+
+## C-10 — P2-S3 provenance resolvability 的保证范围
+
+**Status**: PROMOTED
+
+**Raised by**: Post-implementation `/review`
+
+**Accepted by**: Human frozen triage
+
+### Problem
+
+`ResearcherState` 可以保存 `SourceRecord`、`EvidenceRecord` 与 `ResearchFinding`，但当前
+`ResearcherOutputState` 只投影 `ResearchTaskResult`、`compressed_research` 与 `raw_notes`。
+
+当 Result 的 `source_ids` / `evidence_ids` 非空时，Researcher-local records 不会自动跨过 subgraph
+output boundary；Parent/Supervisor State 也没有 run-scoped Source/Evidence registry。因此 P2-S3 当前
+实现无法保证 populated IDs 在 Parent boundary 可解析。
+
+### Relevant Baseline
+
+- P2-S3 正常 runtime 仍是 shadow structured path，尚未真实 population Source/Evidence/Finding；
+- P2-S3 不实现 Parent registry、EvidenceStore 或 ArtifactStore；
+- 保留当前 Supervisor–Researcher Tool Loop 和 `ResearcherOutputState` projection。
+
+### Options
+
+1. P2-S3 新增 Parent Source/Evidence registries；
+2. 将全部 records inline 到 `ResearchTaskResult`；
+3. 收窄 P2-S3 guarantee，只保证 Researcher-local provenance consistency，并把 cross-boundary
+   resolvability 设为 P2-S4 real population 的 mandatory prerequisite。
+
+### Decision
+
+采用 **Phase-scoped local guarantee**：
+
+- P2-S3 不新增 Parent registry 或 EvidenceStore；
+- P2-S3 的 provenance validator 只要求 Result references 能在同一次 Researcher finalization 可见的
+  `source_records` / `evidence_records` 中解析；
+- P2-S3 不声称 populated Source/Evidence IDs 在 Parent boundary 已经可解析；
+- P2-S4 开始真实 structured population 之前，必须先实现 record carry、inline envelope 或 run-scoped
+  registry 中的一种，使所有 Parent-visible IDs 可解析；
+- P2-S4 不能以 bare dangling IDs 发布真实 structured Result。
+
+### Rationale
+
+P2-S3 的目标是验证 typed Task/Result wiring，而不是提前实现 storage/registry infrastructure。当前
+shadow collections 通常为空，因此在本阶段增加 Parent registry 会扩大 phase scope，却不能替代 P2-S4
+对真实 population boundary 的完整设计。
+
+这是一项明确的 phase limitation，而不是对 end-state provenance requirement 的放宽。
+
+### Impact
+
+影响：
+
+- `ResearchTaskResult` phase semantics；
+- Parent/Researcher boundary wording；
+- provenance contract tests 的 P2-S3 interpretation；
+- P2-S4 entry criteria。
+
+### Canonical Update
+
+同步：
+
+- `docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md`
+- `docs/plans/P2_S3.md`
+
+### Deferred
+
+P2-S4 在真实 population 前选择并实现 Parent-visible record carry / inline / run-scoped registry。
+EvidenceStore 仍属于 future reuse/retrieval layer，不是本决定要求的 P2-S4 infrastructure。
+
+---
+
+## C-11 — Provenance validator 必须成为 Researcher publish gate
+
+**Status**: PROMOTED
+
+**Raised by**: Post-implementation `/review`
+
+**Accepted by**: Human frozen triage
+
+### Problem
+
+`validate_provenance_graph()` 已实现 Task/Result/Source/Evidence consistency checks，但当前
+`compress_research` 构造 `ResearchTaskResult` 后直接返回。存在 validator 不等于 runtime 已经 enforce
+provenance contract。
+
+### Decision
+
+- 在 Researcher publish/finalization boundary 调用现有 `validate_provenance_graph()`；
+- normal、partial 和 failed candidate Result 在 emit 前都必须通过 validation；
+- invalid Source/Evidence/Finding references 不得跨过 structured Result boundary；
+- validation failure 必须中止 invalid candidate Result 的发布；现有 Parent child-failure isolation 可以将
+  escaped boundary error 转换为不含 invalid references 的 task-correlated FAILED Result；
+- 增加 focused regression tests，分别保护 normal finalization 与 failure finalization boundary。
+
+### Rationale
+
+Contract guarantee 取决于 validator 是否位于对象发布前的强制 boundary，而不是项目中是否存在一个可供
+测试手动调用的 helper。
+
+### Impact
+
+影响：
+
+- `compress_research`；
+- failed Result construction；
+- Researcher runtime tests；
+- P2-S3 provenance Acceptance Criteria。
+
+### Canonical Update
+
+同步：
+
+- `docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md`
+- `docs/plans/P2_S3.md`
+
+---
+
+## C-12 — Structured Graph State compactness guardrails
+
+**Status**: PROMOTED
+
+**Raised by**: Post-implementation `/review`
+
+**Accepted by**: Human frozen triage
+
+### Problem
+
+Raw-artifact metadata key denylist 可以被 provider aliases/casing 绕过；同时 `EvidenceRecord.excerpt` 只有
+non-empty 约束，完整 HTML/PDF text 仍可能伪装成 excerpt 进入 structured Graph State。
+
+### Decision
+
+P2-S3 冻结并实现以下 runtime compactness guardrails：
+
+- `EvidenceRecord.excerpt` 最大 **8000 characters**；
+- `SourceRecord.metadata` 的 canonical compact JSON serialized representation 最大
+  **8000 characters**；
+- metadata serialized length 使用 UTF-8-independent Python character count：
+  `json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))` 后取 `len()`；
+- metadata key 在比较前忽略 case 和非字母数字 separator，使 `raw_html`、`raw-html`、`rawHtml` 等映射到
+  同一 normalized key；
+- `content`、`page_content` 与既有 raw/full-payload aliases 继续作为 content-bearing keys 被拒绝；
+- key rejection 是 defense-in-depth，不能替代 serialized total bound 与 ArtifactStore boundary。
+
+这些数字只表示 Graph State/runtime compactness guardrails，不表示：
+
+- 医学证据质量；
+- 引文充分性；
+- excerpt 的临床语义边界；
+- provider content 的可信度。
+
+### Rationale
+
+Architecture invariant 必须具有可执行和可测试的 bound。字符上限限制 State/checkpoint payload，normalized
+key rejection 负责拦截明显误用，两者职责不同。
+
+### Impact
+
+影响：
+
+- `SourceRecord.metadata` validation；
+- `EvidenceRecord.excerpt` schema；
+- domain boundary tests；
+- Artifact Boundary 文档。
+
+### Canonical Update
+
+同步：
+
+- `docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md`
+- `docs/plans/P2_S3.md`
+
+---
+
+## C-13 — Hard child exception 的 partial-state preservation 范围
+
+**Status**: PROMOTED
+
+**Raised by**: Post-implementation `/review`
+
+**Accepted by**: Human frozen triage
+
+### Problem
+
+当 error 在 Researcher finalization/failure boundary 内处理时，该 boundary 可以读取 local
+Source/Evidence/Finding 并保留它们。但若后置 child node 抛出 hard exception，
+`researcher_subgraph.ainvoke()` 不返回 child State；Parent catch 只有 exception，无法恢复之前
+materialize 的 local records。
+
+### Options
+
+1. P2-S3 引入 checkpoint recovery；
+2. P2-S3 引入 retry/attempt lifecycle 或新 persistence；
+3. P2-S3 保持 topology 与 infrastructure 不变，明确 preservation guarantee 只覆盖 finalization/failure
+   boundary 实际可见的 artifacts，并将 state-aware recovery 延后。
+
+### Decision
+
+采用 **Bounded preservation guarantee**：
+
+- P2-S3 不引入 checkpoint recovery、retry/attempt lifecycle、新 persistence 或 topology change；
+- P2-S3 保证 finalization/failure boundary 能取得的 valid Source/Evidence/Finding 不因 compression 或已
+  处理 failure 被丢弃；
+- hard child exception 在 child State 返回前逃逸时，Parent-generated FAILED Result 只保证 task
+  correlation 与 error visibility，不保证恢复不可见的 child partial records；
+- state-aware child failure handling/recovery 延后到 P2-S4/P2-S6；
+- 该 limitation 必须保持显式，不得描述为当前 runtime 已完整满足 hard-exception partial preservation。
+
+### Rationale
+
+在 P2-S3 为恢复尚未真实 population 的 records 引入 checkpoint/persistence 或新 lifecycle，会破坏最小
+change discipline，并扩大 architecture scope。明确 failure boundary 可以避免将无法兑现的保证写成实现
+事实。
+
+### Impact
+
+影响：
+
+- FAILED status 与 partial-artifact wording；
+- Parent/Researcher failure contract；
+- P2-S3 Risks / Non-goals；
+- P2-S4/P2-S6 reliability inputs。
+
+### Canonical Update
+
+同步：
+
+- `docs/application_track/EVIDENCEFLOW_CONTRACTS_V1.md`
+- `docs/plans/P2_S3.md`
+
+### Deferred
+
+- P2-S4：在 evidence-native finalization 设计中评估 state-aware child failure boundary；
+- P2-S6：结合 retry、observability 与 reliability evidence 决定是否需要 checkpoint recovery。
