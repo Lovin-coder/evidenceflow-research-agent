@@ -41,6 +41,7 @@ class FakeModel:
     def __init__(self, response):
         self.response = response
         self.structured_schema = None
+        self.bound_configs = []
 
     def with_structured_output(self, schema):
         self.structured_schema = schema
@@ -52,7 +53,8 @@ class FakeModel:
     def bind_tools(self, _tools):
         return self
 
-    def with_config(self, *_args, **_kwargs):
+    def with_config(self, config=None, **kwargs):
+        self.bound_configs.append(config if config is not None else kwargs)
         return self
 
     async def ainvoke(self, _messages):
@@ -158,6 +160,88 @@ async def test_write_research_brief_dual_writes_one_structured_source(
     legacy_messages = command.update["supervisor_messages"]["value"]
     assert legacy_messages[-1].content == command.update["research_brief"]
     assert fake_model.structured_schema is MedicalResearchBrief
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("thinking_policy", "expected_extra_body"),
+    [
+        (None, None),
+        (False, {"enable_thinking": False}),
+        (True, {"enable_thinking": True}),
+    ],
+)
+async def test_research_model_thinking_policy_reaches_model_boundary(
+    monkeypatch,
+    thinking_policy: bool | None,
+    expected_extra_body: dict[str, bool] | None,
+) -> None:
+    """Forward only an explicit typed Thinking override to model construction."""
+    monkeypatch.delenv("RESEARCH_MODEL_ENABLE_THINKING", raising=False)
+    brief = MedicalResearchBrief(
+        normalized_question="Compare treatment A and treatment B in adults.",
+        question_type="treatment comparison",
+        clinical_elements={"population": "adults"},
+        constraints=[],
+        research_intent="Compare benefits and harms.",
+        evidence_needs=[need()],
+    )
+    fake_model = FakeModel(brief)
+    monkeypatch.setattr(runtime, "configurable_model", fake_model)
+
+    await runtime.write_research_brief(
+        {"messages": [HumanMessage(content="Compare A and B")]},
+        {
+            "configurable": {
+                "research_model": "openai:test-model",
+                "research_model_max_tokens": 321,
+                "research_model_enable_thinking": thinking_policy,
+            }
+        },
+    )
+
+    model_fields = fake_model.bound_configs[-1]["configurable"]
+    assert model_fields["model"] == "openai:test-model"
+    assert model_fields["max_tokens"] == 321
+    if expected_extra_body is None:
+        assert "extra_body" not in model_fields
+    else:
+        assert model_fields["extra_body"] == expected_extra_body
+
+
+@pytest.mark.asyncio
+async def test_arbitrary_extra_body_cannot_bypass_typed_configuration(
+    monkeypatch,
+) -> None:
+    """Drop generic provider kwargs that are not production Configuration fields."""
+    monkeypatch.delenv("RESEARCH_MODEL_ENABLE_THINKING", raising=False)
+    brief = MedicalResearchBrief(
+        normalized_question="Compare treatment A and treatment B in adults.",
+        question_type="treatment comparison",
+        clinical_elements=None,
+        constraints=[],
+        research_intent="Compare benefits and harms.",
+        evidence_needs=[need()],
+    )
+    fake_model = FakeModel(brief)
+    monkeypatch.setattr(runtime, "configurable_model", fake_model)
+
+    await runtime.write_research_brief(
+        {"messages": [HumanMessage(content="Compare A and B")]},
+        {
+            "configurable": {
+                "research_model": "openai:test-model",
+                "research_model_enable_thinking": None,
+                "extra_body": {
+                    "enable_thinking": True,
+                    "arbitrary_provider_option": "must-not-pass",
+                },
+            }
+        },
+    )
+
+    model_fields = fake_model.bound_configs[-1]["configurable"]
+    assert "extra_body" not in model_fields
 
 
 @pytest.mark.asyncio
@@ -304,6 +388,44 @@ async def test_compression_returns_partial_shadow_result_and_legacy_output(
 
 
 @pytest.mark.asyncio
+async def test_compression_rejects_invalid_provenance_before_result_publication(
+    monkeypatch,
+) -> None:
+    """Prevent a normal candidate Result with orphan Evidence from being emitted."""
+    monkeypatch.setattr(runtime, "configurable_model", FakeModel(AIMessage(content="Summary")))
+    task = MedicalResearchTask(
+        task_id="task:call-1",
+        research_question="Question",
+        evidence_needs=[need()],
+        source_preferences=[],
+        priority=0,
+    )
+    orphan_evidence = EvidenceRecord(
+        evidence_id="evidence:orphan",
+        source_id="source:missing",
+        locator="section 1",
+        excerpt="Source-derived passage with no local SourceRecord.",
+        hash="sha256:orphan",
+    )
+
+    with pytest.raises(
+        runtime.ProvenancePublicationError,
+        match="provenance_validation_failure:.*unknown SourceRecord",
+    ):
+        await runtime.compress_research(
+            {
+                "task": task,
+                "researcher_messages": [AIMessage(content="Research notes")],
+                "research_task_status": ResearchTaskStatus.SUCCESS,
+                "source_records": [],
+                "evidence_records": [orphan_evidence],
+                "findings": [],
+            },
+            {},
+        )
+
+
+@pytest.mark.asyncio
 async def test_compression_failure_preserves_structured_artifacts_and_legacy_error(
     monkeypatch,
 ) -> None:
@@ -356,6 +478,44 @@ async def test_compression_failure_preserves_structured_artifacts_and_legacy_err
     assert result.findings == [finding]
     assert result.limitations == finding.limitations
     assert output["compressed_research"].startswith("Error synthesizing")
+
+
+@pytest.mark.asyncio
+async def test_compression_failure_rejects_invalid_partial_provenance(
+    monkeypatch,
+) -> None:
+    """Apply the same publish gate to a FAILED candidate Result with partial records."""
+    monkeypatch.setattr(runtime, "configurable_model", FailingModel(None))
+    task = MedicalResearchTask(
+        task_id="task:call-1",
+        research_question="Question",
+        evidence_needs=[need()],
+        source_preferences=[],
+        priority=0,
+    )
+    orphan_evidence = EvidenceRecord(
+        evidence_id="evidence:orphan",
+        source_id="source:missing",
+        locator="section 1",
+        excerpt="Source-derived passage with no local SourceRecord.",
+        hash="sha256:orphan",
+    )
+
+    with pytest.raises(
+        runtime.ProvenancePublicationError,
+        match="provenance_validation_failure:.*unknown SourceRecord",
+    ):
+        await runtime.compress_research(
+            {
+                "task": task,
+                "researcher_messages": [AIMessage(content="Research notes")],
+                "research_task_status": ResearchTaskStatus.SUCCESS,
+                "source_records": [],
+                "evidence_records": [orphan_evidence],
+                "findings": [],
+            },
+            {},
+        )
 
 
 @pytest.mark.asyncio

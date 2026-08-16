@@ -160,6 +160,13 @@ class Configuration(BaseModel):
             }
         }
     )
+    research_model_enable_thinking: bool | None = Field(
+        default=None,
+        description=(
+            "Optional provider Thinking override for the research model; None "
+            "preserves provider-default behavior."
+        ),
+    )
     research_model_max_tokens: int = Field(
         default=10000,
         metadata={

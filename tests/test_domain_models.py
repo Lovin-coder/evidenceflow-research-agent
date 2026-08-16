@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from open_deep_research.domain_models import (
     CONTRACT_VERSION,
+    MAX_EVIDENCE_EXCERPT_CHARS,
+    MAX_SOURCE_METADATA_SERIALIZED_CHARS,
     EvidenceNeed,
     EvidenceRecord,
     MedicalResearchBrief,
@@ -16,6 +18,24 @@ from open_deep_research.domain_models import (
     SourceRecord,
     validate_provenance_graph,
 )
+
+
+def compact_json_size(value: dict[str, str]) -> int:
+    """Measure metadata with the canonical compact serialization contract."""
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def metadata_with_serialized_size(size: int) -> dict[str, str]:
+    """Build valid metadata with an exact canonical serialized character count."""
+    empty_value_size = compact_json_size({"provider": ""})
+    return {"provider": "x" * (size - empty_value_size)}
 
 
 def evidence_need() -> EvidenceNeed:
@@ -244,6 +264,67 @@ def test_structured_records_reject_process_and_raw_artifact_payloads() -> None:
             source_id="source-1",
             artifact_ref=None,
             metadata={"provider": "test", "raw_html": "<html>full page</html>"},
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata_key",
+    ["content", "page_content", "rawHtml", "raw-html"],
+)
+def test_source_metadata_rejects_normalized_content_bearing_keys(
+    metadata_key: str,
+) -> None:
+    """Reject common raw-content aliases regardless of case or separators."""
+    with pytest.raises(ValidationError, match="raw artifact payloads"):
+        SourceRecord(
+            source_id="source-1",
+            artifact_ref=None,
+            metadata={"provider": "test", metadata_key: "full source body"},
+        )
+
+
+def test_source_metadata_enforces_serialized_compactness_boundary() -> None:
+    """Accept 8000 serialized characters and reject the first oversized payload."""
+    accepted_metadata = metadata_with_serialized_size(
+        MAX_SOURCE_METADATA_SERIALIZED_CHARS
+    )
+    rejected_metadata = metadata_with_serialized_size(
+        MAX_SOURCE_METADATA_SERIALIZED_CHARS + 1
+    )
+
+    record = SourceRecord(
+        source_id="source-1",
+        artifact_ref=None,
+        metadata=accepted_metadata,
+    )
+
+    assert compact_json_size(record.metadata) == MAX_SOURCE_METADATA_SERIALIZED_CHARS
+    with pytest.raises(ValidationError, match="must not exceed 8000 characters"):
+        SourceRecord(
+            source_id="source-2",
+            artifact_ref=None,
+            metadata=rejected_metadata,
+        )
+
+
+def test_evidence_excerpt_enforces_compactness_boundary() -> None:
+    """Accept an 8000-character passage and reject a larger structured excerpt."""
+    record = EvidenceRecord(
+        evidence_id="evidence-1",
+        source_id="source-1",
+        locator="paragraph 1",
+        excerpt="x" * MAX_EVIDENCE_EXCERPT_CHARS,
+        hash="sha256:abc",
+    )
+
+    assert len(record.excerpt) == MAX_EVIDENCE_EXCERPT_CHARS
+    with pytest.raises(ValidationError, match="at most 8000 characters"):
+        EvidenceRecord(
+            evidence_id="evidence-2",
+            source_id="source-1",
+            locator="paragraph 2",
+            excerpt="x" * (MAX_EVIDENCE_EXCERPT_CHARS + 1),
+            hash="sha256:def",
         )
 
 

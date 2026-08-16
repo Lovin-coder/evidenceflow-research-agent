@@ -30,6 +30,7 @@ from open_deep_research.domain_models import (
     ResearchTaskResult,
     ResearchTaskStatus,
     SourceRecord,
+    validate_provenance_graph,
 )
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
@@ -65,8 +66,43 @@ from open_deep_research.utils import (
 
 # Initialize a configurable model that we will use throughout the agent
 configurable_model = init_chat_model(
-    configurable_fields=("model", "max_tokens", "api_key"),
+    configurable_fields=("model", "max_tokens", "api_key", "extra_body"),
 )
+
+
+def _research_model_runtime_config(
+    configurable: Configuration,
+    config: RunnableConfig,
+) -> RunnableConfig:
+    """Build the narrow internal model config for the research-model boundary.
+
+    The explicit configurable mapping prevents arbitrary caller-supplied provider
+    kwargs from entering the configurable model. Only the typed Thinking policy is
+    translated to ``extra_body``; ``None`` deliberately omits that field.
+
+    Args:
+        configurable: Validated production configuration.
+        config: Runtime configuration used only to resolve the existing model API key.
+
+    Returns:
+        RunnableConfig preserving model/max_tokens/api_key behavior and carrying an
+        optional derived provider Thinking override.
+    """
+    model_fields: dict[str, Any] = {
+        "model": configurable.research_model,
+        "max_tokens": configurable.research_model_max_tokens,
+    }
+    api_key = get_api_key_for_model(configurable.research_model, config)
+    if api_key is not None:
+        model_fields["api_key"] = api_key
+    if configurable.research_model_enable_thinking is not None:
+        model_fields["extra_body"] = {
+            "enable_thinking": configurable.research_model_enable_thinking
+        }
+    return {
+        "configurable": model_fields,
+        "tags": ["langsmith:nostream"],
+    }
 
 
 def _render_evidence_need(evidence_need: EvidenceNeed) -> list[str]:
@@ -217,13 +253,17 @@ def _failed_research_result(
         findings: Findings materialized before the failure, if available.
 
     Returns:
-        A FAILED ResearchTaskResult retaining all available Source, Evidence, and
-        Finding references plus their limitations and conflicts.
+        A FAILED ResearchTaskResult retaining all available valid Source, Evidence,
+        and Finding references plus their limitations and conflicts.
+
+    Raises:
+        ProvenancePublicationError: If the supplied partial records cannot form a
+            valid Researcher-local provenance graph.
     """
     preserved_sources = source_records or []
     preserved_evidence = evidence_records or []
     preserved_findings = findings or []
-    return ResearchTaskResult(
+    result = ResearchTaskResult(
         task_id=task.task_id,
         status=ResearchTaskStatus.FAILED,
         findings=preserved_findings,
@@ -246,6 +286,52 @@ def _failed_research_result(
         ),
         error=error,
     )
+    return _validate_research_result_for_publish(
+        task,
+        result,
+        source_records=preserved_sources,
+        evidence_records=preserved_evidence,
+    )
+
+
+class ProvenancePublicationError(ValueError):
+    """Reject a candidate Result whose local provenance graph is inconsistent."""
+
+
+def _validate_research_result_for_publish(
+    task: MedicalResearchTask,
+    result: ResearchTaskResult,
+    *,
+    source_records: list[SourceRecord],
+    evidence_records: list[EvidenceRecord],
+) -> ResearchTaskResult:
+    """Validate Researcher-local provenance before publishing a structured result.
+
+    Args:
+        task: Delegated task that owns the candidate result.
+        result: Candidate cross-subgraph result.
+        source_records: Sources visible at the finalization/failure boundary.
+        evidence_records: Evidence visible at the finalization/failure boundary.
+
+    Returns:
+        The unchanged result after its local provenance graph passes validation.
+
+    Raises:
+        ProvenancePublicationError: If any candidate reference is dangling or
+            inconsistent at the Researcher-local publication boundary.
+    """
+    try:
+        validate_provenance_graph(
+            task=task,
+            result=result,
+            sources=source_records,
+            evidence=evidence_records,
+        )
+    except ValueError as error:
+        raise ProvenancePublicationError(
+            f"provenance_validation_failure: {error}"
+        ) from error
+    return result
 
 
 async def _invoke_research_task(
@@ -308,12 +394,7 @@ async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Comman
     
     # Step 2: Prepare the model for structured clarification analysis
     messages = state["messages"]
-    model_config = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
-        "tags": ["langsmith:nostream"]
-    }
+    model_config = _research_model_runtime_config(configurable, config)
     
     # Configure model with structured output and retry logic
     clarification_model = (
@@ -360,12 +441,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     """
     # Step 1: Set up the research model for structured output
     configurable = Configuration.from_runnable_config(config)
-    research_model_config = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
-        "tags": ["langsmith:nostream"]
-    }
+    research_model_config = _research_model_runtime_config(configurable, config)
     
     # Configure model for structured medical research brief generation
     research_model = (
@@ -424,12 +500,7 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
     """
     # Step 1: Configure the supervisor model with available tools
     configurable = Configuration.from_runnable_config(config)
-    research_model_config = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
-        "tags": ["langsmith:nostream"]
-    }
+    research_model_config = _research_model_runtime_config(configurable, config)
     
     # Available tools: research delegation, completion signaling, and strategic thinking
     lead_researcher_tools = [ConductResearch, ResearchComplete, think_tool]
@@ -637,12 +708,7 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
         )
     
     # Step 2: Configure the researcher model with tools
-    research_model_config = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.research_model, config),
-        "tags": ["langsmith:nostream"]
-    }
+    research_model_config = _research_model_runtime_config(configurable, config)
     
     # Prepare system prompt with MCP context if available
     researcher_prompt = research_system_prompt.format(
@@ -776,8 +842,8 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
     This function takes all the research findings, tool outputs, and AI messages from
     a researcher's work and distills them into a clean, comprehensive summary while
     preserving all important information and findings. If compression cannot complete,
-    the FAILED result still retains Source, Evidence, and Finding objects already
-    materialized in Researcher-local state.
+    the FAILED result still retains valid Source, Evidence, and Finding objects available
+    at the Researcher-local finalization boundary.
     
     Args:
         state: Current researcher state with accumulated research messages
@@ -862,6 +928,12 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
                 conflicts=list(dict.fromkeys(conflicts)),
                 error=None,
             )
+            result = _validate_research_result_for_publish(
+                state["task"],
+                result,
+                source_records=state.get("source_records", []),
+                evidence_records=state.get("evidence_records", []),
+            )
 
             # One execution feeds both paths; legacy text never replaces typed provenance.
             return {
@@ -870,6 +942,9 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
                 "raw_notes": [raw_notes_content],
             }
             
+        except ProvenancePublicationError:
+            # Contract-invalid references must never be retried into or emitted as a Result.
+            raise
         except Exception as e:
             synthesis_attempts += 1
             

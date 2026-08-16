@@ -4,6 +4,7 @@ These models describe stable business boundaries. They intentionally do not
 model LangGraph process state, provider payloads, claims, citations, or stores.
 """
 
+import json
 from enum import Enum
 from typing import Annotated, Any
 
@@ -11,14 +12,18 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CONTRACT_VERSION = "evidenceflow.contracts.v1"
 EVIDENCE_INSUFFICIENT_MARKER = "evidence-insufficient"
+MAX_EVIDENCE_EXCERPT_CHARS = 8_000
+MAX_SOURCE_METADATA_SERIALIZED_CHARS = 8_000
 NonEmptyText = Annotated[str, Field(min_length=1)]
 RAW_ARTIFACT_METADATA_KEYS = {
     "binary_document",
     "complete_payload",
+    "content",
     "full_html",
     "full_pdf_text",
     "full_text",
     "large_source_snapshot",
+    "page_content",
     "provider_payload",
     "raw_content",
     "raw_html",
@@ -135,17 +140,34 @@ class SourceRecord(ContractModel):
 
     @model_validator(mode="after")
     def require_compact_metadata(self) -> "SourceRecord":
-        """Require useful compact metadata without freezing provider-specific keys."""
+        """Reject blank, raw-content-bearing, or oversized source metadata."""
         if not self.metadata:
             raise ValueError("SourceRecord.metadata must not be empty")
         if any(not key.strip() or not value.strip() for key, value in self.metadata.items()):
             raise ValueError("SourceRecord.metadata keys and values must not be blank")
-        normalized_keys = {key.strip().lower().replace("-", "_") for key in self.metadata}
-        forbidden_keys = normalized_keys & RAW_ARTIFACT_METADATA_KEYS
+        forbidden_normalized_keys = {
+            _normalize_metadata_key(key) for key in RAW_ARTIFACT_METADATA_KEYS
+        }
+        forbidden_keys = {
+            key
+            for key in self.metadata
+            if _normalize_metadata_key(key) in forbidden_normalized_keys
+        }
         if forbidden_keys:
             raise ValueError(
                 "SourceRecord.metadata must not contain raw artifact payloads: "
                 f"{sorted(forbidden_keys)}"
+            )
+        serialized_metadata = json.dumps(
+            self.metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if len(serialized_metadata) > MAX_SOURCE_METADATA_SERIALIZED_CHARS:
+            raise ValueError(
+                "SourceRecord.metadata serialized content must not exceed "
+                f"{MAX_SOURCE_METADATA_SERIALIZED_CHARS} characters"
             )
         return self
 
@@ -162,8 +184,13 @@ class EvidenceRecord(ContractModel):
     locator: NonEmptyText = Field(
         description="Auditable location of the passage within its source artifact."
     )
-    excerpt: NonEmptyText = Field(
-        description="Compact source-derived passage, not model-generated interpretation."
+    excerpt: str = Field(
+        min_length=1,
+        max_length=MAX_EVIDENCE_EXCERPT_CHARS,
+        description=(
+            "Source-derived passage bounded for Graph State compactness, not an "
+            "evidence-quality judgment."
+        ),
     )
     hash: NonEmptyText = Field(
         description="Content hash supporting passage audit and change detection."
@@ -346,6 +373,11 @@ def _ensure_unique(values: list[str], field_name: str) -> None:
     """Reject duplicate identities within one immutable contract envelope."""
     if len(values) != len(set(values)):
         raise ValueError(f"{field_name} must contain unique IDs")
+
+
+def _normalize_metadata_key(key: str) -> str:
+    """Normalize metadata key spelling for raw-content defense-in-depth checks."""
+    return "".join(character.lower() for character in key if character.isalnum())
 
 
 def _index_unique(records: list[Any], id_field: str) -> set[str]:
