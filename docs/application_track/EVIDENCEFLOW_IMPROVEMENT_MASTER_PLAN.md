@@ -226,7 +226,8 @@ LocalArtifactStore
 - P2-S3：单轮医学问题；MedicalResearchBrief（内含 evidence_needs[]）、MedicalResearchTask v1。
 - 保留 Agentic Supervisor、`ConductResearch` 语义和 Researcher Subgraph 拓扑。
 - P2-S4：先支持当前 Tavily 主路径；生成 SourceRecord、EvidenceRecord、ResearchFinding、
-  ResearchTaskResult，并落地最小 LocalArtifactStore。
+  ResearchTaskResult；ResearchTaskResult 内联 compact Source/Evidence ledger，并落地 run-scoped
+  LocalArtifactStore，使 provenance 可完整穿过 Researcher boundary。
 - Legacy 文本路径与结构化 Evidence 路径 dual-write / shadow。
 - P2-S5：稳定 Source/Citation 映射；Final Citation 能确定性解析到 Source 与 Evidence；冻结
   ClaimRecord、EvidenceSupport/ClaimEvidenceLink 与 Citation representation，并运行 Groundedness V2
@@ -247,14 +248,16 @@ P2-S3～P2-S5 不以以下内容为核心目标：
 - 综合 Truth Score、全套医学 risk-of-bias 自动评估。
 
 Evidence Store / RAG is a future reuse/retrieval layer built on top of stable Source/Evidence contracts;
-it is not required for the first Evidence-native vertical slice.
+it is not required for the first Evidence-native vertical slice. A future Persistence / Retrieval phase may
+introduce durable Evidence persistence and derived, rebuildable retrieval indexes; a Vector Store must not
+become the authoritative provenance store.
 
 ## 11. P2-S3～P2-S6 Roadmap
 
-| Phase | Focus | Design outcome（均为 Proposed） |
+| Phase | Focus | Roadmap summary（not implementation evidence；canonical status 由各 phase docs 决定） |
 |---|---|---|
 | P2-S3 | Domain & Evidence Contracts | 只冻结 MedicalResearchBrief、MedicalResearchTask、SourceRecord、EvidenceRecord、ResearchFinding、ResearchTaskResult；同时冻结 identity/provenance invariants、医学规划 fixtures、legacy compatibility 与 Eval hypotheses；不实现 Artifact Store |
-| P2-S4 | Evidence-native Researcher | Tavily structured ingestion；Researcher 输出 Findings/ResearchTaskResult；Source/Evidence IDs 穿过 compression 与 Supervisor；dual-write；实现 `ArtifactStore Protocol → LocalArtifactStore` |
+| P2-S4 | Evidence-native Researcher | Tavily structured ingestion；Researcher 输出包含 compact Source/Evidence ledger 的 self-contained ResearchTaskResult；IDs 穿过 compression 与 Supervisor bounded projection；dual-write；实现 run-scoped `ArtifactStore Protocol → LocalArtifactStore` 与 Publication Gate |
 | P2-S5 | Claim–Evidence Grounding | 冻结 ClaimRecord、EvidenceSupport/ClaimEvidenceLink 与 Citation representation；实现四阶段 Groundedness V2；V1/V2 shadow comparison |
 | P2-S6 | Evaluation & Reliability | Frozen regression、Judge calibration、deterministic hard gates、effective experiment manifest；在三条 Track 内改善 partial-failure 可观测性 |
 
@@ -288,10 +291,12 @@ it is not required for the first Evidence-native vertical slice.
   两者都不得改变 Supervisor 的运行时再规划能力。
 - **TODO(P2-S3)**：Source canonicalization、稳定 source ID、run-local `[S01]` 与内部 ID 的映射规则。
 - **TODO(P2-S3)**：EvidenceRecord 的 chunk 粒度与 locator 规则。
-- **TODO(P2-S4)**：ArtifactStore Protocol、LocalArtifactStore、保留周期、隐私与版权策略；P2-S3 的
-  `artifact_ref` 只作为 optional / opaque reference。
-- **TODO(P2-S4)**：ResearchFinding 的结构化输出与 legacy `compressed_research` 如何 dual-write，及冲突
-  Finding 如何表达。
+- **TODO(P2-S4 implementation)**：ArtifactStore Protocol、run-scoped LocalArtifactStore 的具体适配与
+  隐私/版权处理；post-run retention / GC、durable object storage 与迁移策略延后到未来 Persistence
+  phase。P2-S3 的 `artifact_ref` 仍只是 optional / opaque reference。
+- **TODO(P2-S4 implementation)**：按 frozen S4 SPEC 实现 ResearchFinding structured output 与 legacy
+  `compressed_research` dual-write，并保留既有 Finding/Result conflict 字段语义；不得重新选择 Domain
+  representation。
 - **TODO(P2-S5)**：先 claim-first synthesis，还是先写 Report 再抽 Stable Claim Manifest；必须保证
   Global Synthesis 负责 Claim，Verifier 与 Generator 分离。
 - **TODO(P2-S5/P2-S6)**：materiality 规则、Support label rubric、Citation completeness 分母与医学

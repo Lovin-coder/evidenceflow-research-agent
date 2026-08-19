@@ -4,13 +4,13 @@
 
 | Field | Value |
 |---|---|
-| Status | **P2-S3 Contract Freeze Candidate** |
+| Status | **P2-S4 D15 PROMOTED — v1 evidence-native boundary** |
 | Scope | EvidenceFlow domain contracts、Graph State boundaries、cross-graph contract 与 update semantics |
 | Architecture baseline | ODR Agentic Supervisor–Researcher Tool Loop |
 | Governing design | `docs/application_track/EVIDENCEFLOW_IMPROVEMENT_MASTER_PLAN.md` |
 | Contract version | `evidenceflow.contracts.v1` |
 
-本文是 P2-S3 的 implementation-neutral contract specification。它冻结领域对象的职责、最小字段、
+本文是 P2-S3/P2-S4 的 implementation-neutral contract specification。它冻结领域对象的职责、最小字段、
 State 所有权、Parent 与 Researcher 的输入输出边界、identity/provenance invariants 以及并发更新的业务
 语义；它不冻结 Pydantic/TypedDict/dataclass 选择、LangGraph reducer 写法、数据库结构或具体存储产品。
 
@@ -126,7 +126,12 @@ Contract rules：
 
 ### 3.4 SourceRecord
 
-`SourceRecord` 表示一个被检索或接收的外部来源。v1 顶层字段严格保持最小化：
+`SourceRecord` 表示一个被 Host 接纳进入 Evidence pipeline 的外部来源。v1 顶层字段严格保持最小化：
+
+P2-S4 real population 对“接纳”冻结以下 content gate：provider-level `SearchResult` 只是 discovery/process
+observation，不会自动成为 authoritative `SourceRecord`。只有具有 usable normalized source content、能够持久化为
+可检查 Artifact 并支持后续 provenance audit 的 result，才 materialize 为 `SourceRecord`。缺少或无法提供 usable
+source content 的 result 只记录 retrieval/ingestion warning 或 trace，不生成 `SourceRecord` / `EvidenceRecord`。
 
 | Field | Presence | Contract meaning |
 |---|---|---|
@@ -176,7 +181,8 @@ Contract rules：
 Contract rules：
 
 - `EvidenceRecord.source_id` MUST 能解析到 validation scope 中的 SourceRecord。P2-S3 的 scope 是
-  Researcher-local records；P2-S4 real population 前再扩展为 Parent-visible result/registry resolution。
+  Researcher-local records；P2-S4 populated publication 的 scope 是同一个 self-contained
+  `ResearchTaskResult`，不得依赖 Parent sibling registry。
 - `excerpt` MUST 是 compact、source-derived content，且 MUST NOT 超过 8000 characters；完整 HTML/PDF
   文本不得放入该字段。
 - `locator + hash` MUST 支持把所选 Evidence 回查到对应 Source Artifact。
@@ -224,9 +230,11 @@ ResearchTaskResult
 | `contract_version` | Required | serialized v1 固定值为 `evidenceflow.contracts.v1`；由 canonical code constant 提供 |
 | `task_id` | Required | 与输入 Task 相同的稳定 ID |
 | `status` | Required | 当前 invocation 的 execution/termination outcome；Python enum members 为 `SUCCESS/PARTIAL/FAILED`，serialized values 为 `success/partial/failed` |
-| `findings` | Required | Bounded structured Findings；逻辑上属于 Result，可内嵌或通过 `finding_ids` 引用 |
-| `evidence_ids` | Required list | 本任务结果实际使用或保留的 Evidence IDs |
-| `source_ids` | Required list | 上述 Evidence 所属或本结果明确引用的 Source IDs |
+| `source_records` | Required for S4 publication; legacy read default empty | 本 Task Result 发布的 compact Source ledger；包含解析 `source_ids` 与 Evidence provenance 所需的全部 Source targets，不得包含 raw Source artifact |
+| `evidence_records` | Required for S4 publication; legacy read default empty | 本 Task Result 发布的 bounded Evidence ledger；包含解析 `evidence_ids` 与 Finding references 所需的全部 Evidence targets |
+| `findings` | Required | Inline bounded structured Findings；每个 Evidence reference 必须在同一 Result 解析 |
+| `evidence_ids` | Required list | `evidence_records` identities 的 deterministic ordered projection |
+| `source_ids` | Required list | `source_records` identities 的 deterministic ordered projection |
 | `summary` | Required | 给 Supervisor 模型观察的 bounded summary；不是 provenance source |
 | `limitations` | Required, may be empty | 整个任务级别的范围限制和证据缺口 |
 | `conflicts` | Required, may be empty | 整个任务级别需要上层继续处理的冲突 |
@@ -234,24 +242,34 @@ ResearchTaskResult
 
 Contract rules：
 
-- `ResearchTaskResult` MUST 在序列化结果中携带 `contract_version=evidenceflow.contracts.v1`；P2-S3 不新增
+- `ResearchTaskResult` MUST 在序列化结果中携带 `contract_version=evidenceflow.contracts.v1`；不新增
   外层 Result envelope，也不把该字段复制到每个 Domain Model。
 - 每个成功 materialize 的 Task MUST 产生一个可关联的 Result，包括成功、partial、执行失败或并发准入
   失败。无法通过 `ConductResearch` schema validation 的 Tool Call 尚未形成 Task，只返回明确的 legacy
   contract-validation ToolMessage。
 - `ResearchTaskResult.task_id` MUST 与输入 `MedicalResearchTask.task_id` 相同。
-- v1 end-state 要求 Result 公开的 Finding、Evidence 与 Source references 在 result envelope 或
-  run-scoped registry 中可解析；bare dangling IDs 不构成 evidence-native Result。
+- P2-S4 populated Result MUST be a self-contained task-level provenance aggregate。所有公开的 Finding、Evidence
+  与 Source references MUST 在同一个 Result envelope 中解析；bare dangling IDs 不构成 evidence-native Result。
 - **P2-S3 phase limitation**：shadow Result 正常 runtime 尚不 population Source/Evidence/Finding，且
   `ResearcherOutputState` 不携带 Source/Evidence registries。P2-S3 只保证 candidate Result references
   在 Researcher finalization 时能对 Researcher-local `source_records` / `evidence_records` 完成一致性
   validation，不保证 populated IDs 在 Parent boundary 可解析，也不新增 Parent registry 或
   EvidenceStore。
-- P2-S4 开始真实 structured population 前 MUST 实现 inline record carry 或 run-scoped registry，使所有
-  Parent-visible Source/Evidence IDs 可解析；不得发布 bare populated IDs。
+- **P2-S4 promotion**：`source_records` / `evidence_records` inline carry 是唯一 canonical Parent-visible carrier。
+  P2-S4 MUST NOT 新增 Parent sibling Source/Evidence registries，也不得用 external EvidenceStore 替代 Result
+  自包含性。
+- `source_ids` MUST exactly equal the deterministic ordered identity projection of `source_records`；
+  `evidence_ids` MUST exactly equal the deterministic ordered identity projection of `evidence_records`。
+- Every `EvidenceRecord.source_id` MUST resolve within the same Result。Every identity in
+  `ResearchFinding.evidence_ids` MUST resolve within the same Result。
+- 每个 P2-S4 published `SourceRecord` MUST 持有可由同一 Run 的 ArtifactStore 解析的 `artifact_ref`。Raw
+  normalized Source artifact MUST NOT inline 到 Result。
+- Result provenance payload MUST 具有与 Researcher search iteration count 独立的明确总量 bounds。
 - Parent/Supervisor MAY 将 `summary` 放入模型上下文，但 provenance 判断 MUST 使用结构化 IDs/records。
+- Supervisor model rendering MUST be an explicit bounded projection；完整 inline ledger 不得因存在于 State 而
+  自动进入 model context。
 - `error` 不得吞掉 finalization/failure boundary 已经能够取得且通过 validation 的 partial
-  Findings/Evidence；可用结果必须和错误同时保留。
+  Source/Evidence/Findings records；可用 records 必须和错误同时保留在 `PARTIAL` / `FAILED` Result 中。
 - 该接口不得依赖当前 Tool Loop 的内部消息格式，因此未来 Plan + Send 可以复用同一合同。
 - normal、partial 和 failed candidate Result MUST 在 Researcher publish/finalization boundary 调用
   provenance validation；invalid Source/Evidence/Finding references MUST NOT 跨过 structured boundary。
@@ -265,7 +283,8 @@ Status rules：
   `ResearchComplete` 优先。
 - `PARTIAL` 表示因 tool-call budget 或已识别 tool failure 被迫终止，但仍产生可使用的 partial output。
 - `FAILED` 表示 admission、child execution 或 compression failure 阻止正常完成 result boundary；它不
-  允许丢弃 finalization/failure boundary 已经能够取得且通过 validation 的可用结构化结果。
+  允许丢弃 finalization/failure boundary 已经能够取得且通过 validation 的 compact Source/Evidence/Finding
+  records。
 - **P2-S3 known limitation**：hard child exception 若在 `researcher_subgraph.ainvoke()` 返回 State 前
   逃逸，Parent catch 无法取得 child-local partial records。P2-S3 此时只保证 task-correlated FAILED
   Result 与 error visibility；state-aware recovery 延后到 P2-S4/P2-S6，且不在 P2-S3 引入 checkpoint、
@@ -286,16 +305,15 @@ Parent Graph 保存跨阶段需要的最小 run state：
 |---|---|
 | `messages` | 用户对话与 Parent process messages；不是 external Evidence |
 | `medical_research_brief` | 当前有效的 `MedicalResearchBrief` |
-| `research_results` | 一个或多个 `ResearchTaskResult`，按 task identity append/merge；P2-S3 shadow path 不包含 Parent Source/Evidence registry |
+| `research_results` | 一个或多个 self-contained `ResearchTaskResult`，按 task identity append/merge；compact Source/Evidence records inline 于各自 Result，不存在 Parent sibling registry |
 | `final_report` | 当前 run 的最终报告文本 |
 
 `claim_manifest` 不进入 P2-S3 State；它在 P2-S5 冻结。迁移期 Parent MAY 继续携带 `raw_notes` 和
 `notes` legacy channels，但它们不是 v1 structured evidence contract。
 
-v1 evidence-native end-state 中，`research_results` 必须拥有或能解析每个 Result 引用的
-Source/Evidence/Finding records。P2-S3 只接通 structured shadow Result，正常 collections 为空，不实现
-Parent Source/Evidence registry，也不保证 populated IDs 跨 boundary 可解析。P2-S4 在真实 population
-开始前必须选择 record inline/carry 或 run-scoped State registry，并满足 Parent-visible resolvability。
+v1 evidence-native end-state 中，每个 `ResearchTaskResult` 自己拥有解析其公开 references 所需的 compact
+Source/Evidence/Finding records。P2-S3 shadow Result 的 collections 为空；P2-S4 populated Result 使用 inline
+record carry，并明确不增加 Parent Source/Evidence registry。
 
 ### 4.2 Supervisor State
 
@@ -327,12 +345,13 @@ Supervisor 可以通过 Tool Calls 动态生成 `MedicalResearchTask`，但 v1 �
 | `compressed_research` | Legacy bounded text output；迁移期 dual-write |
 | `raw_notes` | Legacy/debug text aggregation；迁移期 dual-write |
 
-完整 Researcher-local State MUST NOT 穿过 Parent boundary。离开子图的领域输出必须投影为
-`ResearchTaskResult`；`researcher_messages` 和内部 Tool observations 留在 local/process scope。
+完整 Researcher-local State MUST NOT 穿过 Parent boundary。离开子图的领域输出必须先通过 publication gate，
+再投影为包含 compact Source/Evidence ledger 的 `ResearchTaskResult`；`researcher_messages`、Candidate、raw
+provider payload 与内部 Tool observations 留在 local/process scope。
 
 P2-S3 provenance validation 使用同一次 finalization 可见的 `source_records` 与 `evidence_records`，只
-保证 Researcher-local graph consistency。该 local guarantee 不等于 P2-S4 evidence-native Result 已经
-具备 Parent-visible record resolution。
+保证 Researcher-local graph consistency。P2-S4 publication gate MUST 将通过验证的 compact records 组装进
+Result，并重新验证 Result 内 projection、reference、artifact、locator、hash 与 bounds 后才能发布。
 
 ### 4.4 Artifact Boundary
 
@@ -375,6 +394,12 @@ Artifact storage 是已冻结的 architectural boundary，但不是 P2-S3 implem
 Artifact Store 与未来 Evidence Store / RAG 不等价：前者保存原始 Artifact，后者是建立在稳定
 Source/Evidence contracts 之上的跨 run 复用与检索层。
 
+P2-S4 ArtifactStore scope 是 **run-scoped**，不是 Researcher-call-scoped。一个 Run 中发布到 Result 的每个
+`artifact_ref` MUST 在 originating Researcher 返回后继续可解析，至少覆盖 downstream publication validation、
+debug/audit 与该 Run 后续 system stages。Store instance 或 raw artifact 不进入 Graph State；State 只保存 opaque
+reference。Run 结束后的 retention、garbage collection、object-storage migration 与 transactional durability 不属于
+v1/P2-S4 contract。
+
 ## 5. Parent ↔ Researcher Contract
 
 跨图接口只包含一个输入和一个输出：
@@ -396,13 +421,15 @@ Boundary rules：
 3. 输入和输出 MUST 使用相同 `task_id`；runtime `tool_call_id` 只负责调用关联。
 4. Supervisor 可以观察 bounded `summary` 与 Findings，但不得读取 Researcher internal messages 来推断
    业务结果。
-5. P2-S3 candidate Result 中公开的 Source/Evidence/Finding references MUST 在 Researcher
-   finalization 可见的 local records 中通过 provenance validation；Compression MUST NOT 生成不存在的
-   新 ID。P2-S4 真实 population 前 MUST 再保证 Parent-visible IDs 跨 boundary 可解析。
-6. Partial/failed Result MUST 保留 status、error 和 finalization/failure boundary 已经能够取得且通过
-   validation 的可用结构化结果。P2-S3 hard child exception 无法恢复未返回的 child State；state-aware
+5. P2-S4 Result MUST inline the compact Source/Evidence targets needed to resolve all published IDs；Compression
+   MUST NOT 生成不存在的新 Evidence ID。
+6. Publication gate MUST validate deterministic ID projections、same-Result reference resolution、run-scoped
+   artifact resolution、locator/excerpt equality、hash equality 与 total payload bounds。
+7. Partial/failed Result MUST 保留 status、error 和 finalization/failure boundary 已经能够取得且通过
+   validation 的 compact Source/Evidence/Finding records。P2-S3 hard child exception 无法恢复未返回的 child State；state-aware
    recovery 延后到 P2-S4/P2-S6。
-7. 当前 Tool Loop 与未来 Plan + Send MUST 能复用这一逻辑接口；调度拓扑不得改变合同含义。
+8. Supervisor 只接收 Result 的 explicit bounded projection；完整 inline Evidence ledger 不自动进入 model context。
+9. 当前 Tool Loop 与未来 Plan + Send MUST 能复用这一逻辑接口；调度拓扑不得改变合同含义。
 
 ## 6. Identity & Provenance Invariants
 
@@ -413,14 +440,19 @@ Boundary rules：
 |---|---|---|
 | I1 | Every `MedicalResearchTask` has a stable `task_id`. | Task 创建后 ID 非空、run 内唯一，retry/Result 保持同值 |
 | I2 | Every `SourceRecord` has a stable `source_id`. | Source 被接受后 ID 非空，dedup/merge/compression 不改 ID |
-| I3 | Every `EvidenceRecord` references an existing `SourceRecord`. | P2-S3 publish gate 在 Researcher-local records 中解析；P2-S4 real population 再保证 Parent-visible resolution |
-| I4 | Every `EvidenceRecord` preserves auditable source provenance through `source_id + locator + hash / artifact_ref`. | P2-S3 验证 local 字段和引用完整；cross-boundary resolution 与 artifact 内容回查在 P2-S4 验证 |
+| I3 | Every `EvidenceRecord` references an existing `SourceRecord`. | P2-S4 populated Result 在同一 inline `source_records` ledger 中解析；不得依赖 Parent sibling registry |
+| I4 | Every `EvidenceRecord` preserves auditable source provenance through `source_id + locator + hash / artifact_ref`. | P2-S4 publication gate 从 Result Source target 解析 run-scoped artifact，并验证 locator exact slice 与 hash |
 | I5 | AIMessage / model-generated content cannot become external Evidence. | Message 或模型摘要不得直接构造为 source-derived excerpt |
-| I6 | Every normal `ResearchFinding` references valid Evidence IDs; evidence-insufficient output is explicit. | P2-S3 publish gate 对 Researcher-local Evidence 解析；空列表必须显式标记 `evidence-insufficient` |
+| I6 | Every normal `ResearchFinding` references valid Evidence IDs; evidence-insufficient output is explicit. | P2-S4 populated Result 在同一 inline `evidence_records` ledger 中解析；空列表必须显式标记 `evidence-insufficient` |
 | I7 | Parent Graph does not depend on Researcher internal messages/tool loop. | Parent contract test 只使用 Task/Result 也能完成聚合与关联 |
 | I8 | Raw source artifacts do not enter new structured Graph State channels. | P2-S3 对 excerpt/metadata 执行 8000-character guards，legacy `ToolMessage/raw_notes` 例外被隔离且不得扩展；P2-S4 移除 |
 | I9 | Legacy `raw_notes`/`compressed_research` and structured contracts can coexist during migration. | dual-write 不覆盖结构化 records，关闭任一路径时行为边界明确 |
 | I10 | Deterministically derived counts are not persisted as contract facts. | `source_count`/`evidence_count` 等由 ID collections 计算 |
+| I11 | Parent-visible provenance references are self-contained and non-dangling. | `source_ids` / `evidence_ids` exactly project inline records，且 Source/Evidence/Finding references 全部在同一 Result 解析 |
+| I12 | Model context is independent from the full structured Result payload. | Supervisor renderer 只显式投影 bounded status/summary/Findings/limitations/conflicts，不 dump inline ledger |
+
+P2-S4 对 I2 的 real-population acceptance 补充：`SearchResult ≠ SourceRecord`。只有通过 usable source-content
+gate 的 accepted、inspectable result 才能进入 authoritative Source collection；rejected result 仅存在于 warning/trace。
 
 这些 invariants 优先于便利性字段或某种具体框架写法。实现若无法满足，必须修改本 contract 或新增
 ADR，不能通过 prompt 约定静默绕过。
@@ -480,6 +512,16 @@ constant。`ResearchTaskResult` 是 P2-S3 cross-graph result contract，MUST 通
 `contract_version` 字段序列化该值；不新增外层 `ResearchTaskResultEnvelope`，也不要求其他每个 Domain
 Model 重复保存版本字段。
 
+S4-D15 将 `source_records` / `evidence_records` 作为 additive inline fields 提升到 v1，完成本文从 P2-S3 已
+预留的 Parent-visible evidence-native end-state。新 consumer MUST 为这两个字段提供 empty-list defaults，以读取
+S3 shadow Result；但 populated P2-S4 Result MUST enforce exact non-dangling projections，不能借 legacy defaults
+省略 records。
+
+当前 strict S3 consumer 会拒绝新增字段，因此不声明 old-consumer/new-producer forward compatibility。P2-S4
+producer 与 consumer MUST atomic upgrade，并通过 serialized consumer contract tests。该限制不触发 v2，是因为
+v1 尚处于本仓库内的 staged migration，且 Parent-visible record resolution 已在原 v1 contract 中明确保留为 S4
+mandatory completion。
+
 未来 persisted Source/Evidence artifacts 的版本机制延后到引入其 storage boundary 的 phase；P2-S3 不
 为尚未持久化的 Source/Evidence contracts 提前增加 storage-version fields。
 
@@ -489,7 +531,8 @@ Model 重复保存版本字段。
 - 改变字段的领域含义、identity scope 或 provenance 责任。
 - 将 nested `EvidenceNeed` 改为独立 Graph Stage。
 - 将 Parent ↔ Researcher 边界改为依赖完整 `ResearcherState`。
-- 将 append/merge channel 改为 overwrite，或放宽任一 I1–I10 invariant。
+- 将 append/merge channel 改为 overwrite，或放宽任一 I1–I12 invariant。
+- 放宽 self-contained Result、exact ID projection 或 same-Result reference resolution invariant。
 - 让 raw artifacts 进入新的 structured Graph State channels，或扩大 P2-S3 legacy migration exception。
 
 以下变化 MAY 在保持 v1 compatibility 的前提下追加：
@@ -510,10 +553,12 @@ Model 重复保存版本字段。
 | Citation representation | P2-S5 冻结 stable citation format 与 deterministic resolution |
 | `claim_manifest` Parent State | 随 P2-S5 Claim contract 冻结后再加入 |
 | `ArtifactStore Protocol → LocalArtifactStore` | P2-S4 实现；P2-S3 只冻结 Artifact boundary 和 opaque `artifact_ref` |
-| Parent-visible Source/Evidence record resolution | P2-S4 real population prerequisite；P2-S3 只保证 Researcher-local provenance consistency，不新增 Parent registry |
+| Parent sibling Source/Evidence registries | S4-D15 已拒绝作为当前 carrier；未来若改变 Result ownership，必须重新进入 contract/version review |
 | Hard child-exception partial-state recovery | P2-S4/P2-S6 评估 state-aware boundary/checkpoint recovery；P2-S3 不新增 persistence、attempt lifecycle 或 topology |
-| Evidence Store | Future reuse/retrieval layer；不是首个 Evidence-native vertical slice 的依赖 |
-| RAG | Future retrieval/generation architecture；不得作为 P2-S3/P2-S4 的隐式前置重构 |
+| Evidence Store / cross-run Evidence persistence | Future persistence phase；P2-S4 inline Result ledger 是 run-local business output，不是 durable Store |
+| Global Evidence identity / cross-run Source dedup | Future persistence phase 必须在 global ID、`(run_id, evidence_id)` 或 provenance-derived identity 之间显式决策 |
+| Artifact retention/GC、object-storage migration、transactional persistence | Future durability phase；P2-S4 只保证 run-scoped resolution lifetime |
+| RAG / embedding / vector index lifecycle | Future retrieval phase；Vector index 只能是 derived、rebuildable projection，不能成为 authoritative provenance store |
 
 同时显式不在 v1 冻结：完整医学 question/study/source-policy enums、跨 run Evidence identity、完整
 Provider Adapter 统一、长期 retention/privacy policy、Plan + Send、Durable Queue 以及具体持久化产品。
