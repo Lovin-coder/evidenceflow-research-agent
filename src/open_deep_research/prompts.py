@@ -41,8 +41,8 @@ For the verification message when no clarification is needed:
 """
 
 
-transform_messages_into_research_topic_prompt = """You will be given a set of messages that have been exchanged so far between yourself and the user. 
-Your job is to translate these messages into a more detailed and concrete research question that will be used to guide the research.
+transform_messages_into_research_topic_prompt = """You will be given messages from a user asking a medical or health research question.
+Translate them into one structured MedicalResearchBrief for an evidence-centered research workflow.
 
 The messages that have been exchanged so far between yourself and the user are:
 <Messages>
@@ -51,7 +51,15 @@ The messages that have been exchanged so far between yourself and the user are:
 
 Today's date is {date}.
 
-You will return a single research question that will be used to guide the research.
+The structured output must contain:
+- normalized_question: a precise restatement that preserves the user's intent
+- question_type: a concise open-text medical question category; do not invent a taxonomy
+- clinical_elements: known structured clinical elements such as population, intervention, comparator, and outcomes when applicable; otherwise null
+- constraints: explicit time, language, geography, population, source, or output constraints; use an empty list when none were supplied
+- research_intent: the decision, comparison, explanation, or exploration the research should support
+- evidence_needs: one or more nested evidence requirements
+
+Each EvidenceNeed should use only the applicable open-list fields: evidence_types, study_types, source_policy, date_constraints, and coverage_dimensions. It must contain at least one concrete requirement. EvidenceNeed is planning semantics, not a search query and not a separate graph stage.
 
 Guidelines:
 1. Maximize Specificity and Detail
@@ -65,14 +73,14 @@ Guidelines:
 - If the user has not provided a particular detail, do not invent one.
 - Instead, state the lack of specification and guide the researcher to treat it as flexible or accept all possible options.
 
-4. Use the First Person
-- Phrase the request from the perspective of the user.
+4. Medical Scope
+- Capture clinical elements only when supported by the messages. Not every question is a PICO question.
+- Do not infer diagnoses, treatments, demographics, outcomes, or evidence hierarchies that the user did not request.
 
-5. Sources
+5. Sources and Evidence
 - If specific sources should be prioritized, specify them in the research question.
-- For product and travel research, prefer linking directly to official or primary websites (e.g., official brand sites, manufacturer pages, or reputable e-commerce platforms like Amazon for user reviews) rather than aggregator sites or SEO-heavy blogs.
 - For academic or scientific queries, prefer linking directly to the original paper or official journal publication rather than survey papers or secondary summaries.
-- For people, try linking directly to their LinkedIn profile, or their personal website if they have one.
+- Distinguish binding source policy from non-binding provider preferences.
 - If the query is in a specific language, prioritize sources published in that language.
 """
 
@@ -98,6 +106,7 @@ Think like a research manager with limited time and resources. Follow these step
 1. **Read the question carefully** - What specific information does the user need?
 2. **Decide how to delegate the research** - Carefully consider the question and decide how to delegate the research. Are there multiple independent directions that can be explored simultaneously?
 3. **After each call to ConductResearch, pause and assess** - Do I have enough to answer? What's still missing?
+4. **Use the structured delegation contract** - For every ConductResearch call provide one self-contained research_question, one or more evidence_needs, source_preferences (which may be empty), and a non-negative relative priority. The runtime assigns task identity.
 </Instructions>
 
 <Hard Limits>
@@ -121,25 +130,24 @@ After each ConductResearch tool call, use think_tool to analyze the results:
 </Show Your Thinking>
 
 <Scaling Rules>
-**Simple fact-finding, lists, and rankings** can use a single sub-agent:
-- *Example*: List the top 10 coffee shops in San Francisco → Use 1 sub-agent
+**Focused medical questions** can use a single sub-agent when one evidence direction is sufficient.
 
-**Comparisons presented in the user request** can use a sub-agent for each element of the comparison:
-- *Example*: Compare OpenAI vs. Anthropic vs. DeepMind approaches to AI safety → Use 3 sub-agents
+**Independent evidence dimensions** can use one sub-agent per dimension when parallel work is justified.
 - Delegate clear, distinct, non-overlapping subtopics
 
 **Important Reminders:**
 - Each ConductResearch call spawns a dedicated research agent for that specific topic
 - A separate agent will write the final report - you just need to gather information
 - When calling ConductResearch, provide complete standalone instructions - sub-agents can't see other agents' work
+- Preserve the EvidenceNeed domain constraints from the MedicalResearchBrief; source_preferences must not weaken source_policy
 - Do NOT use acronyms or abbreviations in your research questions, be very clear and specific
 </Scaling Rules>"""
 
-research_system_prompt = """You are a research assistant conducting research on the user's input topic. For context, today's date is {date}.
+research_system_prompt = """You are a research assistant executing one structured MedicalResearchTask rendered in the user's input message. For context, today's date is {date}.
 
 <Task>
-Your job is to use tools to gather information about the user's input topic.
-You can use any of the tools provided to you to find resources that can help answer the research question. You can call these tools in series or in parallel, your research is conducted in a tool-calling loop.
+Your job is to use tools to gather information that addresses the task's research question and evidence needs while respecting its source preferences.
+You can call tools in series or in parallel; research remains a tool-calling loop. Decide only whether this local task is sufficiently researched. Do not create or select the Supervisor's next global task.
 </Task>
 
 <Available Tools>
@@ -183,47 +191,16 @@ After each search tool call, use think_tool to analyze the results:
 """
 
 
-compress_research_system_prompt = """You are a research assistant that has conducted research on a topic by calling several tools and web searches. Your job is now to clean up the findings, but preserve all of the relevant statements and information that the researcher has gathered. For context, today's date is {date}.
+compress_research_system_prompt = """You are performing provenance-preserving semantic compression of one research task. Today's date is {date}.
 
-<Task>
-You need to clean up information gathered from tool calls and web searches in the existing messages.
-All relevant information should be repeated and rewritten verbatim, but in a cleaner format.
-The purpose of this step is just to remove any obviously irrelevant or duplicative information.
-For example, if three sources all say "X", you could say "These three sources all stated X".
-Only these fully comprehensive cleaned findings are going to be returned to the user, so it's crucial that you don't lose any information from the raw messages.
-</Task>
+Return a concise task summary plus structured findings, task limitations, and material conflicts. Each finding must reference only Evidence IDs supplied in the authoritative Evidence projection. You may interpret and synthesize Evidence, but you must not create or alter Source records, Evidence records, excerpts, locators, hashes, artifact references, Source IDs, or Evidence IDs.
 
-<Guidelines>
-1. Your output findings should be fully comprehensive and include ALL of the information and sources that the researcher has gathered from tool calls and web searches. It is expected that you repeat key information verbatim.
-2. This report can be as long as necessary to return ALL of the information that the researcher has gathered.
-3. In your report, you should return inline citations for each source that the researcher found.
-4. You should include a "Sources" section at the end of the report that lists all of the sources the researcher found with corresponding citations, cited against statements in the report.
-5. Make sure to include ALL of the sources that the researcher gathered in the report, and how they were used to answer the question!
-6. It's really important not to lose any sources. A later LLM will be used to merge this report with others, so having all of the sources is critical.
-</Guidelines>
+Use the smallest relevant Evidence-ID set for each finding. Preserve important uncertainty and conflicting observations. If the available Evidence is insufficient for a useful conclusion, either return no finding or include the exact marker "evidence-insufficient" in a limitation for a finding without Evidence IDs.
 
-<Output Format>
-The report should be structured like this:
-**List of Queries and Tool Calls Made**
-**Fully Comprehensive Findings**
-**List of All Relevant Sources (with citations in the report)**
-</Output Format>
-
-<Citation Rules>
-- Assign each unique URL a single citation number in your text
-- End with ### Sources that lists each source with corresponding numbers
-- IMPORTANT: Number sources sequentially without gaps (1,2,3,4...) in the final list regardless of which sources you choose
-- Example format:
-  [1] Source Title: URL
-  [2] Source Title: URL
-</Citation Rules>
-
-Critical Reminder: It is extremely important that any information that is even remotely relevant to the user's research topic is preserved verbatim (e.g. don't rewrite it, don't summarize it, don't paraphrase it).
+The surrounding tool messages are process context. Only the explicitly labeled authoritative Evidence projection defines the Evidence records you may reference.
 """
 
-compress_research_simple_human_message = """All above messages are about research conducted by an AI Researcher. Please clean up these findings.
-
-DO NOT summarize the information. I want the raw information returned, just in a cleaner format. Make sure all relevant information is preserved - you can rewrite findings verbatim."""
+compress_research_simple_human_message = """Compress the research context into the required structured task summary and findings while preserving only valid Evidence-ID references."""
 
 final_report_generation_prompt = """Based on all the research conducted, create a comprehensive, well-structured answer to the overall research brief:
 <Research Brief>
@@ -365,4 +342,28 @@ Example 2 (for a scientific article):
 Remember, your goal is to create a summary that can be easily understood and utilized by a downstream research agent while preserving the most critical information from the original webpage.
 
 Today's date is {date}.
+"""
+
+
+select_webpage_evidence_prompt = """You are selecting relevant passages from one retrieved webpage for a research task.
+
+Research task:
+{research_topic}
+
+Search query:
+{query}
+
+Source title: {title}
+Source URL: {url}
+
+Candidate passages:
+{candidates}
+
+Return a concise derived summary and at most {max_selected} selected Candidate IDs.
+Select only IDs shown above. Prefer concrete facts, results, recommendations,
+limitations, and relevant conflicts. Avoid boilerplate and redundant passages.
+If no Candidate is useful, return an empty selected_chunk_ids list.
+
+The summary is derived model output and is not authoritative Evidence. Do not
+return excerpts, locators, Source IDs, Evidence IDs, hashes, or artifact references.
 """

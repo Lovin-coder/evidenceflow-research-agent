@@ -1,11 +1,14 @@
 """Configuration management for the Open Deep Research system."""
 
 import os
+import tempfile
 from enum import Enum
 from typing import Any, List, Optional
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
+
+from open_deep_research.domain_models import MIN_RESULT_PROVENANCE_SERIALIZED_CHARS
 
 
 class SearchAPI(Enum):
@@ -150,6 +153,57 @@ class Configuration(BaseModel):
             }
         }
     )
+    artifact_store_root: str = Field(
+        default=os.path.join(tempfile.gettempdir(), "evidenceflow-artifacts"),
+        description="Local root for run-scoped normalized Source artifacts.",
+    )
+    artifact_run_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional explicit owning-run identity used to namespace Source artifacts; "
+            "equal explicit values intentionally share a namespace."
+        ),
+    )
+    max_selected_chunks_per_source: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="Maximum Candidate chunks selected from one accepted Source.",
+    )
+    max_sources_per_research_task: int = Field(
+        default=20,
+        ge=1,
+        le=20,
+        description="Maximum compact Sources retained by one Researcher task.",
+    )
+    max_evidence_records_per_research_task: int = Field(
+        default=40,
+        ge=1,
+        le=40,
+        description="Maximum Evidence records retained by one Researcher task.",
+    )
+    max_evidence_excerpt_chars_per_result: int = Field(
+        default=32_000,
+        ge=1,
+        le=32_000,
+        description="Maximum aggregate Evidence excerpt characters in one task result.",
+    )
+    max_result_provenance_chars: int = Field(
+        default=256_000,
+        ge=MIN_RESULT_PROVENANCE_SERIALIZED_CHARS,
+        le=256_000,
+        description="Maximum compact serialized Source/Evidence payload per task result.",
+    )
+    max_search_tool_message_chars: int = Field(
+        default=24_000,
+        ge=1_000,
+        description="Maximum Tavily model-facing ToolMessage characters.",
+    )
+    max_supervisor_result_projection_chars: int = Field(
+        default=12_000,
+        ge=1_000,
+        description="Maximum model-facing Supervisor projection per task result.",
+    )
     research_model: str = Field(
         default="openai:gpt-4.1",
         metadata={
@@ -159,6 +213,13 @@ class Configuration(BaseModel):
                 "description": "Model for conducting research. NOTE: Make sure your Researcher Model supports the selected search API."
             }
         }
+    )
+    research_model_enable_thinking: bool | None = Field(
+        default=None,
+        description=(
+            "Optional provider Thinking override for the research model; None "
+            "preserves provider-default behavior."
+        ),
     )
     research_model_max_tokens: int = Field(
         default=10000,
