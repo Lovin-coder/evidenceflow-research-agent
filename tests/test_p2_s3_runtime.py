@@ -3,6 +3,7 @@ import importlib
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from open_deep_research.artifact_store import LocalFileArtifactStore
 from open_deep_research.domain_models import (
     EvidenceNeed,
     EvidenceRecord,
@@ -12,6 +13,12 @@ from open_deep_research.domain_models import (
     ResearchTaskResult,
     ResearchTaskStatus,
     SourceRecord,
+)
+from open_deep_research.evidence_ingestion import evidence_hash
+from open_deep_research.state import (
+    ResearchExecutionSeverity,
+    ResearchExecutionStage,
+    make_research_execution_issue,
 )
 
 runtime = importlib.import_module("open_deep_research.deep_researcher")
@@ -68,6 +75,18 @@ class FailingModel(FakeModel):
         raise RuntimeError("model unavailable")
 
 
+class SequentialModel(FakeModel):
+    """Return deterministic responses for successive graph model boundaries."""
+
+    def __init__(self, responses):
+        super().__init__(None)
+        self.responses = list(responses)
+
+    async def ainvoke(self, _messages):
+        """Return the next configured response."""
+        return self.responses.pop(0)
+
+
 class LocalTool:
     """Provide a deterministic local tool with the runtime's minimal interface."""
 
@@ -81,6 +100,16 @@ class LocalTool:
 async def local_researcher_tools(_config):
     """Return local-only tools for termination mapping tests."""
     return [LocalTool("think_tool"), LocalTool("ResearchComplete")]
+
+
+def compression(summary: str = "Summary"):
+    """Build one deterministic structured compression response."""
+    return runtime.ResearchCompression(
+        summary=summary,
+        findings=[],
+        limitations=[],
+        conflicts=[],
+    )
 
 
 def successful_result(task: MedicalResearchTask) -> ResearchTaskResult:
@@ -360,7 +389,7 @@ async def test_compression_returns_partial_shadow_result_and_legacy_output(
     monkeypatch,
 ) -> None:
     """Keep PARTIAL structured and legacy outputs aligned to one execution."""
-    monkeypatch.setattr(runtime, "configurable_model", FakeModel(AIMessage(content="Summary")))
+    monkeypatch.setattr(runtime, "configurable_model", FakeModel(compression()))
     task = MedicalResearchTask(
         task_id="task:call-1",
         research_question="Question",
@@ -392,7 +421,7 @@ async def test_compression_rejects_invalid_provenance_before_result_publication(
     monkeypatch,
 ) -> None:
     """Prevent a normal candidate Result with orphan Evidence from being emitted."""
-    monkeypatch.setattr(runtime, "configurable_model", FakeModel(AIMessage(content="Summary")))
+    monkeypatch.setattr(runtime, "configurable_model", FakeModel(compression()))
     task = MedicalResearchTask(
         task_id="task:call-1",
         research_question="Question",
@@ -410,7 +439,7 @@ async def test_compression_rejects_invalid_provenance_before_result_publication(
 
     with pytest.raises(
         runtime.ProvenancePublicationError,
-        match="provenance_validation_failure:.*unknown SourceRecord",
+        match="unknown SourceRecord",
     ):
         await runtime.compress_research(
             {
@@ -428,6 +457,7 @@ async def test_compression_rejects_invalid_provenance_before_result_publication(
 @pytest.mark.asyncio
 async def test_compression_failure_preserves_structured_artifacts_and_legacy_error(
     monkeypatch,
+    tmp_path,
 ) -> None:
     """Prevent compression failure from erasing materialized provenance references."""
     monkeypatch.setattr(runtime, "configurable_model", FailingModel(None))
@@ -438,17 +468,19 @@ async def test_compression_failure_preserves_structured_artifacts_and_legacy_err
         source_preferences=[],
         priority=0,
     )
+    artifact_text = "Source-derived passage."
+    store = LocalFileArtifactStore(tmp_path, "run-one")
     source = SourceRecord(
         source_id="source:1",
-        artifact_ref=None,
+        artifact_ref=store.put_text(artifact_text),
         metadata={"provider": "test"},
     )
     evidence = EvidenceRecord(
         evidence_id="evidence:1",
         source_id=source.source_id,
-        locator="section 1",
-        excerpt="Source-derived passage.",
-        hash="sha256:abc123",
+        locator=f"char:0-{len(artifact_text)}",
+        excerpt=artifact_text,
+        hash=evidence_hash(artifact_text),
     )
     finding = ResearchFinding(
         finding_id="finding:1",
@@ -467,7 +499,12 @@ async def test_compression_failure_preserves_structured_artifacts_and_legacy_err
             "evidence_records": [evidence],
             "findings": [finding],
         },
-        {},
+        {
+            "configurable": {
+                "artifact_store_root": str(tmp_path),
+                "artifact_run_id": "run-one",
+            }
+        },
     )
 
     result = output["research_task_result"]
@@ -475,6 +512,8 @@ async def test_compression_failure_preserves_structured_artifacts_and_legacy_err
     assert result.error.startswith("compression_failure:")
     assert result.source_ids == [source.source_id]
     assert result.evidence_ids == [evidence.evidence_id]
+    assert result.source_records == [source]
+    assert result.evidence_records == [evidence]
     assert result.findings == [finding]
     assert result.limitations == finding.limitations
     assert output["compressed_research"].startswith("Error synthesizing")
@@ -503,7 +542,7 @@ async def test_compression_failure_rejects_invalid_partial_provenance(
 
     with pytest.raises(
         runtime.ProvenancePublicationError,
-        match="provenance_validation_failure:.*unknown SourceRecord",
+        match="unknown SourceRecord",
     ):
         await runtime.compress_research(
             {
@@ -591,8 +630,8 @@ async def test_explicit_research_complete_precedes_budget_boundary(monkeypatch) 
 async def test_tool_execution_error_downgrades_shadow_result_to_partial(
     monkeypatch,
 ) -> None:
-    """Expose a recognized tool failure as PARTIAL rather than verified success."""
-    monkeypatch.setattr(runtime, "configurable_model", FakeModel(AIMessage(content="Summary")))
+    """Derive PARTIAL from a structured Host issue, not ToolMessage text."""
+    monkeypatch.setattr(runtime, "configurable_model", FakeModel(compression()))
     task = MedicalResearchTask(
         task_id="task:call-1",
         research_question="Question",
@@ -605,7 +644,7 @@ async def test_tool_execution_error_downgrades_shadow_result_to_partial(
             "task": task,
             "researcher_messages": [
                 ToolMessage(
-                    content="Error executing tool: provider unavailable",
+                    content="[Warning omitted at configured model-context bound.]",
                     tool_call_id="search-1",
                 )
             ],
@@ -613,19 +652,35 @@ async def test_tool_execution_error_downgrades_shadow_result_to_partial(
             "source_records": [],
             "evidence_records": [],
             "findings": [],
+            "execution_issues": [
+                make_research_execution_issue(
+                    stage=ResearchExecutionStage.PROVIDER,
+                    code="provider_query_failed",
+                    severity=ResearchExecutionSeverity.ERROR,
+                    message="A provider query failed.",
+                    tool_call_id="search-1",
+                    degrades_task_status=True,
+                    occurrence_key="query:1",
+                )
+            ],
+            "execution_failure_observed": True,
         },
         {},
     )
 
     result = output["research_task_result"]
     assert result.status is ResearchTaskStatus.PARTIAL
-    assert "research tool failed" in result.limitations[0]
+    assert "Host-recorded execution issue" in result.limitations[0]
 
 
 @pytest.mark.asyncio
 async def test_compiled_researcher_crosses_task_result_boundary(monkeypatch) -> None:
     """Verify the compiled subgraph exposes Result and hides Researcher process state."""
-    monkeypatch.setattr(runtime, "configurable_model", FakeModel(AIMessage(content="Summary")))
+    monkeypatch.setattr(
+        runtime,
+        "configurable_model",
+        SequentialModel([AIMessage(content="Done"), compression()]),
+    )
     task = MedicalResearchTask(
         task_id="task:compiled-1",
         research_question="Question",

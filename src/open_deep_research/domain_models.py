@@ -5,14 +5,19 @@ model LangGraph process state, provider payloads, claims, citations, or stores.
 """
 
 import json
+from collections.abc import Sequence
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 CONTRACT_VERSION = "evidenceflow.contracts.v1"
 EVIDENCE_INSUFFICIENT_MARKER = "evidence-insufficient"
 MAX_EVIDENCE_EXCERPT_CHARS = 8_000
+MAX_RESULT_EVIDENCE_CHARS = 32_000
+MAX_RESULT_EVIDENCE_RECORDS = 40
+MAX_RESULT_PROVENANCE_SERIALIZED_CHARS = 256_000
+MAX_RESULT_SOURCE_RECORDS = 20
 MAX_SOURCE_METADATA_SERIALIZED_CHARS = 8_000
 NonEmptyText = Annotated[str, Field(min_length=1)]
 RAW_ARTIFACT_METADATA_KEYS = {
@@ -196,6 +201,47 @@ class EvidenceRecord(ContractModel):
         description="Content hash supporting passage audit and change detection."
     )
 
+    @field_validator("excerpt", mode="before")
+    @classmethod
+    def preserve_exact_excerpt_boundaries(cls, value: object) -> object:
+        """Reject edge whitespace before shared string stripping can change provenance."""
+        if isinstance(value, str) and value != value.strip():
+            raise ValueError(
+                "EvidenceRecord.excerpt must not contain leading or trailing whitespace"
+            )
+        return value
+
+
+def measure_result_provenance_chars(
+    source_records: Sequence[SourceRecord],
+    evidence_records: Sequence[EvidenceRecord],
+) -> int:
+    """Measure the canonical compact provenance projection in characters.
+
+    State admission and the Publication Gate share this exact definition so a
+    record accepted under configured capacity cannot fail later because of a
+    different serialization order or whitespace policy.
+    """
+    provenance_payload = {
+        "source_records": [
+            record.model_dump(mode="json") for record in source_records
+        ],
+        "evidence_records": [
+            record.model_dump(mode="json") for record in evidence_records
+        ],
+    }
+    return len(
+        json.dumps(
+            provenance_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+MIN_RESULT_PROVENANCE_SERIALIZED_CHARS = measure_result_provenance_chars([], [])
+
 
 class ResearchFinding(ContractModel):
     """Represent a task-local interpretation grounded in Evidence records."""
@@ -254,6 +300,20 @@ class ResearchTaskResult(ContractModel):
     status: ResearchTaskStatus = Field(
         description="Execution and termination outcome, not an evidence-quality judgment."
     )
+    source_records: list[SourceRecord] = Field(
+        default_factory=list,
+        max_length=MAX_RESULT_SOURCE_RECORDS,
+        description=(
+            "Compact Source targets required to resolve every published source identity."
+        ),
+    )
+    evidence_records: list[EvidenceRecord] = Field(
+        default_factory=list,
+        max_length=MAX_RESULT_EVIDENCE_RECORDS,
+        description=(
+            "Bounded Evidence targets required to resolve every published evidence identity."
+        ),
+    )
     findings: list[ResearchFinding] = Field(
         description="Task-local findings exposed across the Researcher boundary."
     )
@@ -291,9 +351,35 @@ class ResearchTaskResult(ContractModel):
 
         _ensure_unique(self.evidence_ids, "evidence_ids")
         _ensure_unique(self.source_ids, "source_ids")
+        _ensure_unique(
+            [record.source_id for record in self.source_records], "source_record IDs"
+        )
+        _ensure_unique(
+            [record.evidence_id for record in self.evidence_records],
+            "evidence_record IDs",
+        )
         _ensure_unique([finding.finding_id for finding in self.findings], "finding_ids")
 
-        known_evidence_ids = set(self.evidence_ids)
+        projected_source_ids = [record.source_id for record in self.source_records]
+        projected_evidence_ids = [record.evidence_id for record in self.evidence_records]
+        if self.source_ids != projected_source_ids:
+            raise ValueError(
+                "source_ids must exactly project source_records in record order"
+            )
+        if self.evidence_ids != projected_evidence_ids:
+            raise ValueError(
+                "evidence_ids must exactly project evidence_records in record order"
+            )
+
+        known_source_ids = set(projected_source_ids)
+        for record in self.evidence_records:
+            if record.source_id not in known_source_ids:
+                raise ValueError(
+                    f"EvidenceRecord {record.evidence_id!r} references unknown "
+                    f"SourceRecord {record.source_id!r} in the result"
+                )
+
+        known_evidence_ids = set(projected_evidence_ids)
         for finding in self.findings:
             if finding.task_id != self.task_id:
                 raise ValueError("Every finding must reference the result task_id")
@@ -302,6 +388,25 @@ class ResearchTaskResult(ContractModel):
                 raise ValueError(
                     f"Finding references Evidence IDs missing from the result: {sorted(missing)}"
                 )
+
+        total_evidence_chars = sum(
+            len(record.excerpt) for record in self.evidence_records
+        )
+        if total_evidence_chars > MAX_RESULT_EVIDENCE_CHARS:
+            raise ValueError(
+                "ResearchTaskResult Evidence excerpts must not exceed "
+                f"{MAX_RESULT_EVIDENCE_CHARS} total characters"
+            )
+
+        serialized_size = measure_result_provenance_chars(
+            self.source_records,
+            self.evidence_records,
+        )
+        if serialized_size > MAX_RESULT_PROVENANCE_SERIALIZED_CHARS:
+            raise ValueError(
+                "ResearchTaskResult provenance payload must not exceed "
+                f"{MAX_RESULT_PROVENANCE_SERIALIZED_CHARS} serialized characters"
+            )
         return self
 
 
@@ -309,16 +414,12 @@ def validate_provenance_graph(
     *,
     task: MedicalResearchTask,
     result: ResearchTaskResult,
-    sources: list[SourceRecord],
-    evidence: list[EvidenceRecord],
 ) -> None:
-    """Validate all run-local provenance references exposed by a task result.
+    """Validate the self-contained task-level provenance graph.
 
     Args:
         task: Delegated task that owns the result and its findings.
         result: Cross-graph result whose references must be resolvable.
-        sources: Run-local SourceRecord registry available to the result.
-        evidence: Run-local EvidenceRecord registry available to the result.
 
     Raises:
         ValueError: If an identity is duplicated, dangling, or inconsistent with the
@@ -327,46 +428,9 @@ def validate_provenance_graph(
     if result.task_id != task.task_id:
         raise ValueError("ResearchTaskResult.task_id must match MedicalResearchTask.task_id")
 
-    source_ids = _index_unique(sources, "source_id")
-    evidence_ids = _index_unique(evidence, "evidence_id")
-
-    for record in evidence:
-        if record.source_id not in source_ids:
-            raise ValueError(
-                f"EvidenceRecord {record.evidence_id!r} references unknown SourceRecord "
-                f"{record.source_id!r}"
-            )
-
-    missing_result_sources = set(result.source_ids) - source_ids
-    if missing_result_sources:
-        raise ValueError(
-            f"ResearchTaskResult references unknown Source IDs: {sorted(missing_result_sources)}"
-        )
-    missing_result_evidence = set(result.evidence_ids) - evidence_ids
-    if missing_result_evidence:
-        raise ValueError(
-            "ResearchTaskResult references unknown Evidence IDs: "
-            f"{sorted(missing_result_evidence)}"
-        )
-
-    evidence_by_id = {record.evidence_id: record for record in evidence}
-    required_source_ids = {
-        evidence_by_id[evidence_id].source_id for evidence_id in result.evidence_ids
-    }
-    missing_evidence_sources = required_source_ids - set(result.source_ids)
-    if missing_evidence_sources:
-        raise ValueError(
-            "ResearchTaskResult.source_ids omits Sources used by its Evidence: "
-            f"{sorted(missing_evidence_sources)}"
-        )
-
-    for finding in result.findings:
-        missing_finding_evidence = set(finding.evidence_ids) - evidence_ids
-        if missing_finding_evidence:
-            raise ValueError(
-                f"ResearchFinding {finding.finding_id!r} references unknown Evidence IDs: "
-                f"{sorted(missing_finding_evidence)}"
-            )
+    # Revalidation at the publication boundary protects callers that receive a
+    # deserialized model instance rather than constructing it locally.
+    ResearchTaskResult.model_validate(result.model_dump(mode="python"))
 
 
 def _ensure_unique(values: list[str], field_name: str) -> None:
@@ -378,10 +442,3 @@ def _ensure_unique(values: list[str], field_name: str) -> None:
 def _normalize_metadata_key(key: str) -> str:
     """Normalize metadata key spelling for raw-content defense-in-depth checks."""
     return "".join(character.lower() for character in key if character.isalnum())
-
-
-def _index_unique(records: list[Any], id_field: str) -> set[str]:
-    """Build a unique ID set for provenance validation."""
-    identities = [getattr(record, id_field) for record in records]
-    _ensure_unique(identities, id_field)
-    return set(identities)

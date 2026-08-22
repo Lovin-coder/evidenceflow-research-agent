@@ -13,7 +13,12 @@ from open_deep_research.domain_models import (
     SourceRecord,
 )
 from open_deep_research.state import (
+    ResearchExecutionSeverity,
+    ResearchExecutionStage,
+    boolean_or_reducer,
     evidence_records_reducer,
+    execution_issues_reducer,
+    make_research_execution_issue,
     research_results_reducer,
     source_records_reducer,
 )
@@ -74,10 +79,41 @@ def test_source_and_evidence_reducers_use_stable_identity() -> None:
         )
 
 
+def test_execution_issue_reducer_is_idempotent_and_conflict_detecting() -> None:
+    """Preserve structured execution facts without last-writer-wins ambiguity."""
+    issue = make_research_execution_issue(
+        stage=ResearchExecutionStage.PROVIDER,
+        code="provider_query_failed",
+        severity=ResearchExecutionSeverity.ERROR,
+        message="One provider query failed.",
+        tool_call_id="search-1",
+        degrades_task_status=True,
+        occurrence_key="query:1",
+    )
+
+    assert execution_issues_reducer([], [issue, issue]) == [issue]
+    assert make_research_execution_issue(
+        stage=ResearchExecutionStage.PROVIDER,
+        code="provider_query_failed",
+        severity=ResearchExecutionSeverity.ERROR,
+        message="One provider query failed.",
+        tool_call_id="search-1",
+        degrades_task_status=True,
+        occurrence_key="query:1",
+    ) == issue
+    assert boolean_or_reducer(True, False) is True
+    with pytest.raises(ValueError, match="Contract conflict"):
+        execution_issues_reducer(
+            [issue],
+            [issue.model_copy(update={"message": "Conflicting diagnostic."})],
+        )
+
+
 def test_state_channels_expose_structured_and_legacy_contracts() -> None:
     """Ensure structured contracts coexist with the frozen legacy state path."""
     assert {
         "medical_research_brief",
+        "artifact_run_id",
         "research_brief",
         "research_results",
         "raw_notes",
@@ -85,10 +121,13 @@ def test_state_channels_expose_structured_and_legacy_contracts() -> None:
     } <= set(deep_researcher.channels)
     assert {
         "task",
+        "artifact_run_id",
         "research_topic",
         "source_records",
         "evidence_records",
         "findings",
+        "execution_issues",
+        "execution_failure_observed",
         "research_task_status",
         "research_task_result",
         "compressed_research",

@@ -2,12 +2,14 @@ import json
 
 import pytest
 from langchain_core.messages import AIMessage
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
+from open_deep_research.configuration import Configuration
 from open_deep_research.domain_models import (
     CONTRACT_VERSION,
     MAX_EVIDENCE_EXCERPT_CHARS,
     MAX_SOURCE_METADATA_SERIALIZED_CHARS,
+    MIN_RESULT_PROVENANCE_SERIALIZED_CHARS,
     EvidenceNeed,
     EvidenceRecord,
     MedicalResearchBrief,
@@ -16,6 +18,7 @@ from open_deep_research.domain_models import (
     ResearchTaskResult,
     ResearchTaskStatus,
     SourceRecord,
+    measure_result_provenance_chars,
     validate_provenance_graph,
 )
 
@@ -89,6 +92,8 @@ def test_result_serializes_discoverable_contract_version() -> None:
     serialized = result.model_dump(mode="json")
 
     assert serialized["contract_version"] == CONTRACT_VERSION
+    assert serialized["source_records"] == []
+    assert serialized["evidence_records"] == []
     assert (
         ResearchTaskResult.model_validate_json(result.model_dump_json()).contract_version
         == CONTRACT_VERSION
@@ -97,6 +102,20 @@ def test_result_serializes_discoverable_contract_version() -> None:
         ResearchTaskResult.model_validate_json(
             json.dumps(
                 {**serialized, "contract_version": "evidenceflow.contracts.v2"}
+            )
+        )
+
+
+def test_configured_provenance_bound_can_represent_the_empty_envelope() -> None:
+    """Reject configuration that makes every ResearchTaskResult unpublishable."""
+    assert (
+        measure_result_provenance_chars([], [])
+        == MIN_RESULT_PROVENANCE_SERIALIZED_CHARS
+    )
+    with pytest.raises(ValidationError):
+        Configuration(
+            max_result_provenance_chars=(
+                MIN_RESULT_PROVENANCE_SERIALIZED_CHARS - 1
             )
         )
 
@@ -209,6 +228,8 @@ def test_provenance_graph_accepts_valid_references() -> None:
     result = ResearchTaskResult(
         task_id=task().task_id,
         status=ResearchTaskStatus.SUCCESS,
+        source_records=[source],
+        evidence_records=[evidence],
         findings=[finding],
         evidence_ids=[evidence.evidence_id],
         source_ids=[source.source_id],
@@ -217,9 +238,7 @@ def test_provenance_graph_accepts_valid_references() -> None:
         conflicts=[],
     )
 
-    validate_provenance_graph(
-        task=task(), result=result, sources=[source], evidence=[evidence]
-    )
+    validate_provenance_graph(task=task(), result=result)
 
 
 def test_provenance_graph_rejects_invalid_source_and_evidence_references() -> None:
@@ -231,20 +250,18 @@ def test_provenance_graph_rejects_invalid_source_and_evidence_references() -> No
         excerpt="An orphan source passage.",
         hash="sha256:def456",
     )
-    result = ResearchTaskResult(
-        task_id=task().task_id,
-        status=ResearchTaskStatus.PARTIAL,
-        findings=[],
-        evidence_ids=[orphan_evidence.evidence_id],
-        source_ids=[],
-        summary="Partial result.",
-        limitations=["Source unavailable."],
-        conflicts=[],
-    )
-
-    with pytest.raises(ValueError, match="unknown SourceRecord"):
-        validate_provenance_graph(
-            task=task(), result=result, sources=[], evidence=[orphan_evidence]
+    with pytest.raises(ValidationError, match="unknown SourceRecord"):
+        ResearchTaskResult(
+            task_id=task().task_id,
+            status=ResearchTaskStatus.PARTIAL,
+            source_records=[],
+            evidence_records=[orphan_evidence],
+            findings=[],
+            evidence_ids=[orphan_evidence.evidence_id],
+            source_ids=[],
+            summary="Partial result.",
+            limitations=["Source unavailable."],
+            conflicts=[],
         )
 
 
@@ -327,6 +344,15 @@ def test_evidence_excerpt_enforces_compactness_boundary() -> None:
             hash="sha256:def",
         )
 
+    with pytest.raises(ValidationError, match="leading or trailing whitespace"):
+        EvidenceRecord(
+            evidence_id="evidence-3",
+            source_id="source-1",
+            locator="paragraph 3",
+            excerpt=" source-derived text ",
+            hash="sha256:ghi",
+        )
+
 
 def test_provenance_graph_requires_sources_used_by_result_evidence() -> None:
     """Require every result-level Evidence reference to retain its Source identity."""
@@ -342,20 +368,18 @@ def test_provenance_graph_requires_sources_used_by_result_evidence() -> None:
         excerpt="Source-derived text.",
         hash="sha256:abc",
     )
-    result = ResearchTaskResult(
-        task_id=task().task_id,
-        status=ResearchTaskStatus.PARTIAL,
-        findings=[],
-        evidence_ids=[evidence.evidence_id],
-        source_ids=[],
-        summary="Partial result.",
-        limitations=["Source projection incomplete."],
-        conflicts=[],
-    )
-
-    with pytest.raises(ValueError, match="omits Sources"):
-        validate_provenance_graph(
-            task=task(), result=result, sources=[source], evidence=[evidence]
+    with pytest.raises(ValidationError, match="source_ids must exactly project"):
+        ResearchTaskResult(
+            task_id=task().task_id,
+            status=ResearchTaskStatus.PARTIAL,
+            source_records=[source],
+            evidence_records=[evidence],
+            findings=[],
+            evidence_ids=[evidence.evidence_id],
+            source_ids=[],
+            summary="Partial result.",
+            limitations=["Source projection incomplete."],
+            conflicts=[],
         )
 
 
@@ -370,9 +394,23 @@ def test_result_rejects_finding_from_another_task() -> None:
         conflicts=[],
     )
     with pytest.raises(ValidationError, match="result task_id"):
+        source = SourceRecord(
+            source_id="source-1",
+            artifact_ref="artifact:sha256:abc",
+            metadata={"provider": "test"},
+        )
+        evidence = EvidenceRecord(
+            evidence_id="evidence-1",
+            source_id=source.source_id,
+            locator="char:0-7",
+            excerpt="Passage",
+            hash="sha256:abc",
+        )
         ResearchTaskResult(
             task_id="task:call-1",
             status=ResearchTaskStatus.SUCCESS,
+            source_records=[source],
+            evidence_records=[evidence],
             findings=[finding],
             evidence_ids=["evidence-1"],
             source_ids=["source-1"],
@@ -380,3 +418,93 @@ def test_result_rejects_finding_from_another_task() -> None:
             limitations=[],
             conflicts=[],
         )
+
+
+def test_promoted_result_reads_shadow_payload_but_rejects_dangling_ids() -> None:
+    """Keep S3 empty-ledger reads while forbidding populated ID-only publication."""
+    shadow_payload = {
+        "task_id": "task:call-1",
+        "status": "success",
+        "findings": [],
+        "evidence_ids": [],
+        "source_ids": [],
+        "summary": "Shadow result.",
+        "limitations": [],
+        "conflicts": [],
+    }
+
+    result = ResearchTaskResult.model_validate_json(json.dumps(shadow_payload))
+
+    assert result.source_records == []
+    assert result.evidence_records == []
+    with pytest.raises(ValidationError, match="evidence_ids must exactly project"):
+        ResearchTaskResult.model_validate_json(
+            json.dumps({**shadow_payload, "evidence_ids": ["evidence:dangling"]})
+        )
+
+
+def test_result_rejects_unbounded_total_evidence_excerpt_payload() -> None:
+    """Bound total inline provenance independently of individual Evidence limits."""
+    source = SourceRecord(
+        source_id="source-1",
+        artifact_ref="artifact:sha256:" + "a" * 64,
+        metadata={"provider": "test"},
+    )
+    evidence = [
+        EvidenceRecord(
+            evidence_id=f"evidence-{index}",
+            source_id=source.source_id,
+            locator=f"char:{index * 7000}-{(index + 1) * 7000}",
+            excerpt="x" * 7000,
+            hash=f"sha256:{index}",
+        )
+        for index in range(5)
+    ]
+
+    with pytest.raises(ValidationError, match="must not exceed 32000 total characters"):
+        ResearchTaskResult(
+            task_id=task().task_id,
+            status=ResearchTaskStatus.SUCCESS,
+            source_records=[source],
+            evidence_records=evidence,
+            findings=[],
+            source_ids=[source.source_id],
+            evidence_ids=[record.evidence_id for record in evidence],
+            summary="Bounded result.",
+            limitations=[],
+            conflicts=[],
+        )
+
+
+def test_strict_s3_consumer_rejects_promoted_inline_ledgers() -> None:
+    """Document why populated S4 producers and consumers require atomic promotion."""
+
+    class StrictS3Result(BaseModel):
+        """Represent the old strict Result field set for compatibility evidence."""
+
+        model_config = ConfigDict(extra="forbid", strict=True)
+
+        contract_version: str
+        task_id: str
+        status: str
+        findings: list[dict[str, object]]
+        evidence_ids: list[str]
+        source_ids: list[str]
+        summary: str
+        limitations: list[str]
+        conflicts: list[str]
+        error: str | None = None
+
+    promoted = ResearchTaskResult(
+        task_id="task:call-1",
+        status=ResearchTaskStatus.SUCCESS,
+        findings=[],
+        evidence_ids=[],
+        source_ids=[],
+        summary="Promoted result.",
+        limitations=[],
+        conflicts=[],
+    )
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        StrictS3Result.model_validate(promoted.model_dump(mode="json"))

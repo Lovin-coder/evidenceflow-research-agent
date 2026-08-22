@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import warnings
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
@@ -29,9 +30,32 @@ from langgraph.config import get_store
 from mcp import McpError
 from tavily import AsyncTavilyClient
 
+from open_deep_research.artifact_store import (
+    ArtifactStore,
+    artifact_store_from_config,
+)
 from open_deep_research.configuration import Configuration, SearchAPI
+from open_deep_research.domain_models import EvidenceRecord, SourceRecord
+from open_deep_research.evidence_ingestion import (
+    WebpageSelection,
+    build_source_record,
+    canonicalize_source_url,
+    chunk_source_text,
+    is_usable_source_content,
+    materialize_evidence,
+    normalize_source_text,
+    render_researcher_observation,
+    sanitize_candidate_selection,
+    select_webpage_chunks,
+)
 from open_deep_research.prompts import summarize_webpage_prompt
-from open_deep_research.state import ResearchComplete, Summary
+from open_deep_research.state import (
+    ResearchComplete,
+    ResearchExecutionIssue,
+    ResearchExecutionSeverity,
+    ResearchExecutionStage,
+    make_research_execution_issue,
+)
 
 ##########################
 # Tavily Search Tool Utils
@@ -40,6 +64,34 @@ TAVILY_SEARCH_DESCRIPTION = (
     "A search engine optimized for comprehensive, accurate, and trusted results. "
     "Useful for when you need to answer questions about current events."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SearchExecutionResult:
+    """Carry authoritative search data separately from bounded model content."""
+
+    model_content: str
+    sources: list[SourceRecord]
+    evidences: list[EvidenceRecord]
+    issues: list[ResearchExecutionIssue]
+    tool_call_id: str | None = None
+
+    @property
+    def warnings(self) -> list[str]:
+        """Project diagnostic messages for compatibility, never Host status logic."""
+        return [issue.message for issue in self.issues]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessedSearchResult:
+    """Carry one accepted provider result through the structured executor."""
+
+    source: SourceRecord
+    evidences: list[EvidenceRecord]
+    model_content: str
+    issues: list[ResearchExecutionIssue]
+
+
 @tool(description=TAVILY_SEARCH_DESCRIPTION)
 async def tavily_search(
     queries: List[str],
@@ -58,82 +110,386 @@ async def tavily_search(
     Returns:
         Formatted string containing summarized search results
     """
-    # Step 1: Execute search queries asynchronously
-    search_results = await tavily_search_async(
+    result = await execute_tavily_search_structured(
         queries,
         max_results=max_results,
         topic=topic,
-        include_raw_content=True,
-        config=config
+        config=config,
     )
-    
-    # Step 2: Deduplicate results by URL to avoid processing the same content multiple times
-    unique_results = {}
-    for response in search_results:
-        for result in response['results']:
-            url = result['url']
-            if url not in unique_results:
-                unique_results[url] = {**result, "query": response['query']}
-    
-    # Step 3: Set up the summarization model with configuration
+    return result.model_content
+
+
+async def execute_tavily_search_structured(
+    queries: List[str],
+    max_results: int = 5,
+    topic: Literal["general", "news", "finance"] = "general",
+    config: RunnableConfig = None,
+    *,
+    research_topic: str = "",
+    provider_responses: list[dict[str, Any] | BaseException] | None = None,
+    selection_model: Any | None = None,
+    artifact_store: ArtifactStore | None = None,
+    artifact_run_id: str | None = None,
+    tool_call_id: str | None = None,
+) -> SearchExecutionResult:
+    """Execute Tavily and split structured provenance from bounded model context.
+
+    Provider snippets are never used as authoritative Source content. Each usable
+    ``raw_content`` result is normalized, persisted, chunked, selected, and Host-
+    materialized independently so one result failure cannot erase valid siblings.
+
+    Args:
+        queries: Existing agent-visible search queries.
+        max_results: Existing per-query provider result limit.
+        topic: Existing Tavily topic filter.
+        config: Runtime and EvidenceFlow bounds configuration.
+        research_topic: Researcher-local task context for semantic selection.
+        provider_responses: Optional deterministic provider fixture for tests.
+        selection_model: Optional deterministic structured selector for tests.
+        artifact_store: Optional run-scoped Store override for tests.
+        artifact_run_id: Internal owning-run namespace when no Store is injected.
+        tool_call_id: Runtime correlation ID copied into structured execution issues.
+
+    Returns:
+        Structured records, issues, and a bounded Evidence-aware model projection.
+    """
+    search_results = provider_responses
+    if search_results is None:
+        search_results = await tavily_search_async(
+            queries,
+            max_results=max_results,
+            topic=topic,
+            include_raw_content=True,
+            config=config,
+        )
+
     configurable = Configuration.from_runnable_config(config)
-    
-    # Character limit to stay within model token limits (configurable)
-    max_char_to_include = configurable.max_content_length
-    
-    # Initialize summarization model with retry logic
-    model_api_key = get_api_key_for_model(configurable.summarization_model, config)
-    summarization_model = init_chat_model(
-        model=configurable.summarization_model,
-        max_tokens=configurable.summarization_model_max_tokens,
-        api_key=model_api_key,
-        tags=["langsmith:nostream"]
-    ).with_structured_output(Summary).with_retry(
-        stop_after_attempt=configurable.max_structured_output_retries
+    store = artifact_store or artifact_store_from_config(config, artifact_run_id)
+    if selection_model is None:
+        model_api_key = get_api_key_for_model(configurable.summarization_model, config)
+        selection_model = (
+            init_chat_model(
+                model=configurable.summarization_model,
+                max_tokens=configurable.summarization_model_max_tokens,
+                api_key=model_api_key,
+                tags=["langsmith:nostream"],
+            )
+            .with_structured_output(WebpageSelection)
+            .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        )
+
+    issues_found: list[ResearchExecutionIssue] = []
+
+    def issue(
+        *,
+        stage: ResearchExecutionStage,
+        code: str,
+        severity: ResearchExecutionSeverity,
+        message: str,
+        degrades_task_status: bool,
+        occurrence_key: str,
+        source_id: str | None = None,
+        candidate_id: str | None = None,
+    ) -> ResearchExecutionIssue:
+        """Build one bounded issue correlated to this search execution."""
+        return make_research_execution_issue(
+            stage=stage,
+            code=code,
+            severity=severity,
+            message=message,
+            degrades_task_status=degrades_task_status,
+            tool_call_id=tool_call_id,
+            source_id=source_id,
+            candidate_id=candidate_id,
+            occurrence_key=occurrence_key,
+        )
+
+    unique_results: dict[str, dict[str, Any]] = {}
+    for response_index, response in enumerate(search_results, start=1):
+        if isinstance(response, BaseException):
+            issues_found.append(
+                issue(
+                    stage=ResearchExecutionStage.PROVIDER,
+                    code="provider_query_failed",
+                    severity=ResearchExecutionSeverity.ERROR,
+                    message=(
+                        f"Tavily query {response_index} failed with "
+                        f"{type(response).__name__}."
+                    ),
+                    degrades_task_status=True,
+                    occurrence_key=f"query:{response_index}",
+                )
+            )
+            continue
+        query = str(response.get("query", ""))
+        results = response.get("results", [])
+        if not isinstance(results, list):
+            issues_found.append(
+                issue(
+                    stage=ResearchExecutionStage.PROVIDER,
+                    code="invalid_provider_results_payload",
+                    severity=ResearchExecutionSeverity.ERROR,
+                    message=(
+                        f"Tavily query {response_index} returned an invalid results payload."
+                    ),
+                    degrades_task_status=True,
+                    occurrence_key=f"query:{response_index}",
+                )
+            )
+            continue
+        for result_index, provider_result in enumerate(results, start=1):
+            if not isinstance(provider_result, dict):
+                issues_found.append(
+                    issue(
+                        stage=ResearchExecutionStage.PROVIDER,
+                        code="invalid_provider_result",
+                        severity=ResearchExecutionSeverity.ERROR,
+                        message=(
+                            f"Tavily result {response_index}.{result_index} was not an object."
+                        ),
+                        degrades_task_status=True,
+                        occurrence_key=f"result:{response_index}:{result_index}",
+                    )
+                )
+                continue
+            url = str(provider_result.get("url") or "")
+            dedup_key = canonicalize_source_url(url) or (
+                f"missing-url:{response_index}:{result_index}"
+            )
+            if dedup_key not in unique_results:
+                unique_results[dedup_key] = {**provider_result, "query": query}
+
+    model_level_issues = list(issues_found)
+
+    async def process_result(
+        ordinal: int, provider_result: dict[str, Any]
+    ) -> _ProcessedSearchResult | ResearchExecutionIssue:
+        raw_content = provider_result.get("raw_content")
+        title = str(provider_result.get("title") or "Untitled source")
+        url = str(provider_result.get("url") or "")
+        label = url or f"result {ordinal}"
+        if not is_usable_source_content(raw_content):
+            return issue(
+                stage=ResearchExecutionStage.CONTENT_GATE,
+                code="unusable_provider_content",
+                severity=ResearchExecutionSeverity.WARNING,
+                message=f"Skipped {label}: no usable provider raw_content.",
+                degrades_task_status=False,
+                occurrence_key=f"result:{ordinal}:raw",
+            )
+        assert isinstance(raw_content, str)
+        result_issues: list[ResearchExecutionIssue] = []
+        bounded_raw_content = raw_content[: configurable.max_content_length]
+        if len(raw_content) > configurable.max_content_length:
+            result_issues.append(
+                issue(
+                    stage=ResearchExecutionStage.CONTENT_GATE,
+                    code="source_content_bounded",
+                    severity=ResearchExecutionSeverity.WARNING,
+                    message=(
+                        "Source content was bounded to "
+                        f"{configurable.max_content_length} characters before normalization."
+                    ),
+                    degrades_task_status=False,
+                    occurrence_key=f"result:{ordinal}:content-bound",
+                )
+            )
+        normalized_text = normalize_source_text(bounded_raw_content)
+        if not is_usable_source_content(normalized_text):
+            return issue(
+                stage=ResearchExecutionStage.CONTENT_GATE,
+                code="unusable_normalized_content",
+                severity=ResearchExecutionSeverity.WARNING,
+                message=f"Skipped {label}: normalized raw_content was not usable.",
+                degrades_task_status=False,
+                occurrence_key=f"result:{ordinal}:normalized",
+            )
+        artifact_ref = store.put_text(normalized_text)
+        source = build_source_record(
+            url=url,
+            title=title,
+            provider="tavily",
+            artifact_ref=artifact_ref,
+            normalized_text=normalized_text,
+        )
+        candidates = chunk_source_text(normalized_text)
+        try:
+            selection = await asyncio.wait_for(
+                select_webpage_chunks(
+                    selection_model,
+                    research_topic=research_topic or "General web research",
+                    query=str(provider_result.get("query") or ""),
+                    title=title,
+                    url=url,
+                    candidates=candidates,
+                    max_selected=configurable.max_selected_chunks_per_source,
+                    validate_ids=False,
+                ),
+                timeout=60.0,
+            )
+            selection, selection_rejections = sanitize_candidate_selection(
+                selection,
+                candidates,
+                max_selected=configurable.max_selected_chunks_per_source,
+            )
+            result_issues.extend(
+                issue(
+                    stage=ResearchExecutionStage.SELECTION,
+                    code=rejection.code,
+                    severity=ResearchExecutionSeverity.WARNING,
+                    message=rejection.message,
+                    degrades_task_status=True,
+                    occurrence_key=f"result:{ordinal}:{rejection.candidate_id}",
+                    source_id=source.source_id,
+                    candidate_id=rejection.candidate_id,
+                )
+                for rejection in selection_rejections
+            )
+            evidences = []
+            for selected_chunk_id in selection.selected_chunk_ids:
+                single_selection = WebpageSelection(
+                    summary=selection.summary,
+                    selected_chunk_ids=[selected_chunk_id],
+                )
+                try:
+                    evidences.extend(
+                        materialize_evidence(
+                            source=source,
+                            candidates=candidates,
+                            selection=single_selection,
+                            artifact_store=store,
+                            max_selected=1,
+                        )
+                    )
+                except Exception as evidence_error:
+                    result_issues.append(
+                        issue(
+                            stage=ResearchExecutionStage.MATERIALIZATION,
+                            code="evidence_materialization_failed",
+                            severity=ResearchExecutionSeverity.ERROR,
+                            message=(
+                                f"Candidate {selected_chunk_id} failed provenance "
+                                "materialization and was rejected with "
+                                f"{type(evidence_error).__name__}."
+                            ),
+                            degrades_task_status=True,
+                            occurrence_key=(
+                                f"result:{ordinal}:candidate:{selected_chunk_id}"
+                            ),
+                            source_id=source.source_id,
+                            candidate_id=selected_chunk_id,
+                        )
+                    )
+            summary = selection.summary
+        except Exception as error:
+            result_issues.append(
+                issue(
+                    stage=ResearchExecutionStage.SELECTION,
+                    code="evidence_selection_failed",
+                    severity=ResearchExecutionSeverity.ERROR,
+                    message=(
+                        "Evidence selection/materialization failed; accepted Source was "
+                        f"preserved ({type(error).__name__})."
+                    ),
+                    degrades_task_status=True,
+                    occurrence_key=f"result:{ordinal}:selection",
+                    source_id=source.source_id,
+                )
+            )
+            evidences = []
+            summary = "Evidence selection was unavailable for this accepted Source."
+        model_content = render_researcher_observation(
+            source=source,
+            summary=summary,
+            evidence=evidences,
+            warnings=[item.message for item in result_issues],
+        )
+        return _ProcessedSearchResult(
+            source=source,
+            evidences=evidences,
+            model_content=model_content,
+            issues=result_issues,
+        )
+
+    processed_or_errors = await asyncio.gather(
+        *(
+            process_result(index, provider_result)
+            for index, provider_result in enumerate(unique_results.values(), start=1)
+        ),
+        return_exceptions=True,
     )
-    
-    # Step 4: Create summarization tasks (skip empty content)
-    async def noop():
-        """No-op function for results without raw content."""
-        return None
-    
-    summarization_tasks = [
-        noop() if not result.get("raw_content") 
-        else summarize_webpage(
-            summarization_model, 
-            result['raw_content'][:max_char_to_include]
+    processed: list[_ProcessedSearchResult] = []
+    for index, item in enumerate(processed_or_errors, start=1):
+        if isinstance(item, BaseException):
+            ingestion_issue = issue(
+                stage=ResearchExecutionStage.MATERIALIZATION,
+                code="result_ingestion_failed",
+                severity=ResearchExecutionSeverity.ERROR,
+                message=(
+                    f"Tavily result {index} failed ingestion with "
+                    f"{type(item).__name__}."
+                ),
+                degrades_task_status=True,
+                occurrence_key=f"result:{index}:ingestion",
+            )
+            issues_found.append(ingestion_issue)
+            model_level_issues.append(ingestion_issue)
+        elif isinstance(item, ResearchExecutionIssue):
+            issues_found.append(item)
+            model_level_issues.append(item)
+        else:
+            processed.append(item)
+            issues_found.extend(item.issues)
+
+    sources = [item.source for item in processed]
+    evidences = [record for item in processed for record in item.evidences]
+    model_blocks = [item.model_content for item in processed]
+    if not model_blocks:
+        model_blocks.append("No authoritative Sources or Evidence were accepted.")
+    if model_level_issues:
+        model_blocks.extend(
+            (
+                "Ingestion warnings (process metadata, not Evidence):",
+                *(f"- {item.message}" for item in model_level_issues),
+            )
         )
-        for result in unique_results.values()
-    ]
-    
-    # Step 5: Execute all summarization tasks in parallel
-    summaries = await asyncio.gather(*summarization_tasks)
-    
-    # Step 6: Combine results with their summaries
-    summarized_results = {
-        url: {
-            'title': result['title'], 
-            'content': result['content'] if summary is None else summary
-        }
-        for url, result, summary in zip(
-            unique_results.keys(), 
-            unique_results.values(), 
-            summaries
-        )
-    }
-    
-    # Step 7: Format the final output
-    if not summarized_results:
-        return "No valid search results found. Please try different search queries or use a different search API."
-    
-    formatted_output = "Search results: \n\n"
-    for i, (url, result) in enumerate(summarized_results.items()):
-        formatted_output += f"\n\n--- SOURCE {i+1}: {result['title']} ---\n"
-        formatted_output += f"URL: {url}\n\n"
-        formatted_output += f"SUMMARY:\n{result['content']}\n\n"
-        formatted_output += "\n\n" + "-" * 80 + "\n"
-    
-    return formatted_output
+    model_content = _join_bounded_model_blocks(
+        model_blocks,
+        max_chars=configurable.max_search_tool_message_chars,
+    )
+    return SearchExecutionResult(
+        model_content=model_content,
+        sources=sources,
+        evidences=evidences,
+        issues=issues_found,
+        tool_call_id=tool_call_id,
+    )
+
+
+def _join_bounded_model_blocks(blocks: list[str], *, max_chars: int) -> str:
+    """Keep whole Evidence-aware blocks while enforcing the model-context bound."""
+    separator = "\n\n---\n\n"
+    marker = "[Additional search observations omitted at configured bound.]"
+    admitted: list[str] = []
+    current_length = 0
+    for block in blocks:
+        added_length = len(block) + (len(separator) if admitted else 0)
+        if current_length + added_length > max_chars:
+            break
+        admitted.append(block)
+        current_length += added_length
+    if len(admitted) == len(blocks):
+        return separator.join(admitted)
+    marker_length = len(marker) + (len(separator) if admitted else 0)
+    while admitted and current_length + marker_length > max_chars:
+        removed = admitted.pop()
+        current_length -= len(removed)
+        if admitted:
+            current_length -= len(separator)
+        marker_length = len(marker) + (len(separator) if admitted else 0)
+    if marker_length <= max_chars:
+        admitted.append(marker)
+    return separator.join(admitted)
 
 async def tavily_search_async(
     search_queries, 
@@ -168,8 +524,8 @@ async def tavily_search_async(
         for query in search_queries
     ]
     
-    # Execute all search queries in parallel and return results
-    search_results = await asyncio.gather(*search_tasks)
+    # Preserve successful sibling queries when one provider request fails.
+    search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
     return search_results
 
 async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
@@ -180,7 +536,7 @@ async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
         webpage_content: Raw webpage content to be summarized
         
     Returns:
-        Formatted summary with key excerpts, or original content if summarization fails
+        Formatted summary, or a bounded non-Evidence failure observation.
     """
     try:
         # Create prompt with current date context
@@ -204,13 +560,11 @@ async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
         return formatted_summary
         
     except asyncio.TimeoutError:
-        # Timeout during summarization - return original content
-        logging.warning("Summarization timed out after 60 seconds, returning original content")
-        return webpage_content
+        logging.warning("Summarization timed out after 60 seconds")
+        return "Webpage summarization unavailable; no Evidence was materialized."
     except Exception as e:
-        # Other errors during summarization - log and return original content
-        logging.warning(f"Summarization failed with error: {str(e)}, returning original content")
-        return webpage_content
+        logging.warning(f"Summarization failed with error: {str(e)}")
+        return "Webpage summarization unavailable; no Evidence was materialized."
 
 ##########################
 # Reflection Tool Utils
