@@ -53,6 +53,7 @@ T11 — cross-agent provenance publication boundary
 | T14 | 不因 quality gate 扩大 production scope；只修复本阶段已允许 files |
 | T15 | smoke evidence / phase documentation；不得为 smoke 修改 graph topology |
 | T16 | `P2_S4_CHECKLIST.md`、`P2_S4_RETRO.md`、`CONTRIBUTION_MAP.md` |
+| T17 | S4 runtime files、对应 tests 与 closeout docs；仅限 post-review corrective defects |
 
 任何超出该 mapping 的 production file 修改必须先说明必要性，并检查是否触发 Clarification/Contract promotion。
 
@@ -902,3 +903,70 @@ T15。
 - Smoke result。
 
 不得把 Temporal Source Versioning、Evidence diversity、Groundedness、Claim/Citation 写成 P2-S4 已实现。
+
+---
+
+## T17 — Post-review Corrective Conformance
+
+### Depends
+
+T00A、T02、T03、T08、T10、T11、T12。
+
+### Goal
+
+Correct four verified implementation defects without changing the frozen Domain contract,
+graph topology, or persistence scope.
+
+### Allowed files
+
+- `artifact_store.py`、`configuration.py`、`state.py`、`domain_models.py`；
+- `evidence_ingestion.py`、`utils.py`、`deep_researcher.py`；
+- corresponding deterministic tests and P2-S4 closeout documents.
+
+### Implement
+
+- replace node-local config mutation with one internal State-carried owning-run Artifact
+  identity; no default `thread_id` reuse;
+- distinguish Finding materialization failure from true Publication Gate failure and keep
+  newly generated Finding batches atomic;
+- preserve bounded structured execution issues in Researcher-local State and remove
+  `ToolMessage` substring status inference;
+- enforce `max_result_provenance_chars` during deterministic State admission using the same
+  canonical measurement as the Domain validator and Publication Gate.
+
+### Required regressions
+
+- no explicit `artifact_run_id`: multiple graph nodes and later Researcher invocation share
+  one namespace; independent runs do not;
+- invented compression Evidence ID produces a gated FAILED Result retaining valid
+  Source/Evidence rather than escaping the child boundary;
+- a task-degrading issue still produces PARTIAL when its warning is absent from bounded
+  model context;
+- a deliberately small valid serialized provenance bound produces a deterministic accepted
+  subset, a structured admission issue, aligned ToolMessage content, and a publishable Result;
+- T02 directly covers empty input, a short single block, small-tail merge, and exact Evidence
+  slicing after contract validation.
+
+### Forbidden
+
+- new Domain contracts or Parent sibling registries;
+- storing `SearchExecutionResult` in Graph State;
+- Publication Gate subset repair;
+- dependency/lockfile or topology changes.
+
+### Done
+
+All corrective regressions and the existing deterministic suite pass, closeout claims are
+updated to match the corrected evidence, and runtime smoke remains separately classified.
+
+### Completion evidence
+
+- project suite: `72 passed`;
+- no-explicit-ID multi-iteration Supervisor namespace regression passed, including
+  independent-run isolation and explicit sharing;
+- recoverable Finding batch, structured issue/context separation, configured provenance
+  admission, T02 edge cases, and Publication Gate regressions passed;
+- targeted Ruff, scoped mypy, compileall, and `git diff --check` passed;
+- clean proxy-sanitized runtime checks reached the model endpoint, Tavily, and structured
+  Tavily executor; the single Researcher exceeded its 60-second bound, so full graph smoke
+  was not attempted and remains explicitly blocked.
