@@ -52,7 +52,7 @@ Researcher 内部是 Model–Tool–Observation 循环，多个 Researcher 通�
 
 **Baseline / Implemented**：`raw_notes` 是 AIMessage 与 ToolMessage 的文本聚合，`notes` 来自
 Supervisor ToolMessages，最终写作主要消费压缩文本。系统没有稳定的 Source、Evidence、Finding、
-Claim、Claim–Evidence Link 与 Citation provenance；AI 生成内容可能进入 Grounding Context。
+Claim、Claim-level Grounding 与 Citation provenance；AI 生成内容可能进入 Grounding Context。
 这是 EvidenceFlow 最关键的结构性缺口。
 
 ### L3 — Evaluation Granularity
@@ -60,7 +60,7 @@ Claim、Claim–Evidence Link 与 Citation provenance；AI 生成内容可能进
 **Baseline / Implemented**：L4 Final Artifact Eval 最完整；L1 只有 Supervisor parallelism 的
 局部原型；L2 Trajectory 基本缺失；现有 Groundedness 同时抽 Claim 并对混合 `raw_notes`
 做粗粒度支持判断，无法验证 Citation 指向的具体 Evidence，也未区分 Groundedness、Citation
-Correctness、Citation Completeness 与 Factual Correctness。
+placement/faithfulness 与 Factual Correctness。
 
 ### L4 — Domain Adaptation Gap
 
@@ -133,18 +133,18 @@ QueryRecord，也不追求一次填满所有医学元数据。Researcher 本地�
 **Proposed / Freeze Candidate**，回答“报告中的关键 Claim 为什么成立？”
 
 ```text
-EvidenceRecords
-  → global claim synthesis
-  → ClaimRecord
-  → ClaimEvidenceLink
-  → Citation
-  → Grounding verification
+ResearchTaskResult[]
+  → ClaimRecord[]
+  → ClaimGroundingRecord[]
+  → Citation[]
+  → GroundingManifest
+  → V2 Shadow Report
 ```
 
-Groundedness V2 固定为四阶段：A）Claim Extraction；B）确定性 Citation Resolution；
-C）Claim–Evidence Entailment；D）Materiality-aware Aggregation。Judge 只处理语义判断，Citation
-语法、ID 存在性、Source/Evidence 解析等由代码完成。Claim Groundedness、Citation Correctness、
-Citation Completeness 与 Factual Correctness 保持独立指标，不提前合成单一 Truth Score。
+P2-S5 采用 Claim-first、claim-centered Grounding：Generator 提出 Claim semantics，Grounding Judge 对 Host-derived
+Evidence universe 产生整体 semantic verdict，Host 负责 identity、reference resolution、五态 status、Citation 与
+atomic Manifest。V2 Shadow Report 是 Manifest 的 derived artifact；Citation completeness 是 Publication Gate
+structural invariant，不作为退化的 quality metric，也不提前合成单一 Truth Score。
 
 ## 6. Target Data Flow
 
@@ -158,10 +158,10 @@ Medical Question
   → ResearchFinding(s) with evidence IDs
   → ResearchTaskResult
   → Supervisor observe / re-evaluate
-  → Global Synthesis → ClaimRecord(s)
-  → ClaimEvidenceLink + stable Citation
-  → deterministic resolution + entailment verification
-  → Final Report + auditable evaluation artifacts
+  → Global Synthesis → ClaimRecord[]
+  → ClaimGroundingRecord[] → Citation[]
+  → GroundingManifest
+  → V2 Shadow Report + external evaluation artifacts
 ```
 
 该流图冻结“合同先行、拓扑保留”：第一轮仍是 Supervisor–Researcher，而不是新增 RAG、Send
@@ -188,11 +188,12 @@ policy 的精确枚举仍为 **TODO(P2-S3)**，不能凭通用医学常识自行
 
 **P2-S5 implementation-level freeze** 才覆盖：
 
-- `ClaimRecord`。
-- `EvidenceSupport / ClaimEvidenceLink`。
-- Citation representation。
+- `EvidenceRef` / `FindingRef` 与 `ClaimRecord`；
+- claim-centered `ClaimGroundingRecord`，不引入 Relation/EvidenceGroup proof graph；
+- Evidence-level canonical `Citation` 与 derived reader-facing Source display；
+- atomic `GroundingManifest`、V2 Shadow Renderer 与 Research Run isolation。
 
-因此 P2-S3 只保留这些概念在目标链中的位置，不冻结 Claim、Link 或 Citation 的全部实现细节。
+因此 P2-S3 只保留这些概念在目标链中的位置，current P2-S5 semantics 由 phase SPEC 与 Contracts v1 冻结。
 
 **Artifact storage boundary（architectural freeze）**：Store 是架构边界，不是 P2-S3 的实现目标。
 P2-S3 中 `artifact_ref` 只是 optional / opaque reference，不要求真实 Artifact Store 或解析协议。
@@ -229,9 +230,9 @@ LocalArtifactStore
   ResearchTaskResult；ResearchTaskResult 内联 compact Source/Evidence ledger，并落地 run-scoped
   LocalArtifactStore，使 provenance 可完整穿过 Researcher boundary。
 - Legacy 文本路径与结构化 Evidence 路径 dual-write / shadow。
-- P2-S5：稳定 Source/Citation 映射；Final Citation 能确定性解析到 Source 与 Evidence；冻结
-  ClaimRecord、EvidenceSupport/ClaimEvidenceLink 与 Citation representation，并运行 Groundedness V2
-  四阶段 shadow evaluation。
+- P2-S5：从 `ResearchTaskResult[]` 产生 Claim、Claim-level Grounding、Citation 与 atomic Manifest；运行
+  constrained V2 Shadow Report、external faithfulness evaluation，并保持 V1 compatibility 与 one-active-Research-Run
+  provenance isolation。
 - 少量 Frozen Evidence fixtures，用于 contract、citation、support/contradiction 回归。
 
 ## 10. Explicit Non-goals
@@ -258,7 +259,7 @@ become the authoritative provenance store.
 |---|---|---|
 | P2-S3 | Domain & Evidence Contracts | 只冻结 MedicalResearchBrief、MedicalResearchTask、SourceRecord、EvidenceRecord、ResearchFinding、ResearchTaskResult；同时冻结 identity/provenance invariants、医学规划 fixtures、legacy compatibility 与 Eval hypotheses；不实现 Artifact Store |
 | P2-S4 | Evidence-native Researcher | Tavily structured ingestion；Researcher 输出包含 compact Source/Evidence ledger 的 self-contained ResearchTaskResult；IDs 穿过 compression 与 Supervisor bounded projection；dual-write；实现 run-scoped `ArtifactStore Protocol → LocalArtifactStore` 与 Publication Gate |
-| P2-S5 | Claim–Evidence Grounding | 冻结 ClaimRecord、EvidenceSupport/ClaimEvidenceLink 与 Citation representation；实现四阶段 Groundedness V2；V1/V2 shadow comparison |
+| P2-S5 | Claim-centered Grounding | 冻结 ClaimRecord、ClaimGroundingRecord、Citation、GroundingManifest 与 Research Run isolation；实现 Claim-first V2 shadow path 与 V1/V2 comparison |
 | P2-S6 | Evaluation & Reliability | Frozen regression、Judge calibration、deterministic hard gates、effective experiment manifest；在三条 Track 内改善 partial-failure 可观测性 |
 
 完整 Trajectory、Provider 扩展、Send、Durable Queue、Online feedback 属于 P2-S6 之后的 Future Work，
@@ -297,9 +298,9 @@ become the authoritative provenance store.
 - **TODO(P2-S4 implementation)**：按 frozen S4 SPEC 实现 ResearchFinding structured output 与 legacy
   `compressed_research` dual-write，并保留既有 Finding/Result conflict 字段语义；不得重新选择 Domain
   representation。
-- **TODO(P2-S5)**：先 claim-first synthesis，还是先写 Report 再抽 Stable Claim Manifest；必须保证
-  Global Synthesis 负责 Claim，Verifier 与 Generator 分离。
-- **TODO(P2-S5/P2-S6)**：materiality 规则、Support label rubric、Citation completeness 分母与医学
-  source policy；不得直接沿用未经校准的通用 Judge 权重。
+- **RESOLVED(P2-S5)**：采用 Claim-first Global Synthesis、独立 Generator/Judge logical roles、Host-owned
+  five-state materialization 与 exact Citation Gate；详见 P2-S5 SPEC/Clarifications。
+- **DEFERRED(P2-S6)**：Judge calibration、医学 source-quality rubric 与 release thresholds；不得直接沿用未经
+  校准的通用 Judge 权重。
 - **TODO(P2-S6)**：Frozen Dataset 版本、人工校准规模、Hard Gate 和 Release threshold；阈值不能由
   本计划臆定。
