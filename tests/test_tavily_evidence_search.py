@@ -1,5 +1,7 @@
 """Regression tests for P2-S4 structured Tavily execution."""
 
+from datetime import datetime
+
 import pytest
 
 import open_deep_research.utils as search_runtime
@@ -66,6 +68,7 @@ def provider_response() -> dict:
                 "title": "Clinical guideline",
                 "url": "https://example.test/guideline?utm_source=search",
                 "content": "Provider snippet must not become Evidence.",
+                "published_date": "2025-04-18",
                 "raw_content": (
                     "Recommendation\r\n\r\nAdults should discuss benefits and harms "
                     "with a clinician before individualized treatment.\r\n\r\n"
@@ -105,6 +108,48 @@ async def test_structured_tavily_builds_dual_channel_exact_provenance(tmp_path) 
     assert "Provider snippet must not become Evidence" not in result.model_content
     assert "\r" not in artifact
     assert result.warnings == []
+    assert source.metadata["published_at"] == "2025-04-18"
+    retrieved_at = datetime.fromisoformat(source.metadata["retrieved_at"])
+    assert retrieved_at.utcoffset() is not None
+    assert retrieved_at.utcoffset().total_seconds() == 0
+    assert set(source.metadata) == {
+        "provider",
+        "title",
+        "url",
+        "retrieved_at",
+        "published_at",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tavily_metadata_omits_unmapped_and_malformed_fields(tmp_path) -> None:
+    """Map only the frozen reliable Tavily surface and reject malformed dates."""
+    response = provider_response()
+    response["results"][0].update(
+        {
+            "published_date": "not-a-date",
+            "publisher": "Unverified publisher",
+            "authors": "Unverified authors",
+            "document_type": "Unverified type",
+            "retrieval_score": "0.99",
+            "images": ["https://example.test/image.png"],
+            "favicon": "https://example.test/favicon.ico",
+        }
+    )
+
+    result = await execute_tavily_search_structured(
+        ["treatment effectiveness"],
+        provider_responses=[response],
+        selection_model=SelectingModel(),
+        artifact_store=LocalFileArtifactStore(tmp_path, "run-one"),
+    )
+
+    assert set(result.sources[0].metadata) == {
+        "provider",
+        "title",
+        "url",
+        "retrieved_at",
+    }
 
 
 @pytest.mark.asyncio

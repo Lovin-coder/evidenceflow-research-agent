@@ -19,7 +19,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
-from langgraph.types import Command
+from langgraph.types import Command, Overwrite
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from open_deep_research.artifact_store import (
@@ -36,6 +36,7 @@ from open_deep_research.domain_models import (
     MAX_RESULT_SOURCE_RECORDS,
     EvidenceNeed,
     EvidenceRecord,
+    GroundingManifest,
     MedicalResearchBrief,
     MedicalResearchTask,
     ResearchFinding,
@@ -50,6 +51,8 @@ from open_deep_research.evidence_ingestion import (
     validate_evidence_provenance,
     validate_source_artifact,
 )
+from open_deep_research.global_synthesis import run_global_synthesis
+from open_deep_research.global_synthesis.pipeline import _contained_pipeline_failure
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
@@ -70,6 +73,7 @@ from open_deep_research.state import (
     ResearchExecutionIssue,
     ResearchExecutionSeverity,
     ResearchExecutionStage,
+    ResearchRunStatus,
     SupervisorState,
     admit_research_execution_issues,
     make_research_execution_issue,
@@ -95,6 +99,10 @@ configurable_model = init_chat_model(
 )
 
 
+class _ResearchRunLifecycleConflict(RuntimeError):
+    """Reject an input occurrence that cannot enter the current Research Run."""
+
+
 def _artifact_run_id_for_node(
     state_run_id: str | None,
     config: RunnableConfig,
@@ -111,6 +119,125 @@ def _artifact_run_id_for_node(
         config,
         runtime_run_id=runtime_run_id,
     )
+
+
+def _new_research_run_update(
+    *,
+    state: AgentState,
+    current_human_count: int,
+    config: RunnableConfig,
+    runtime: Runtime[Any] | None,
+) -> dict[str, Any]:
+    """Build the atomic reset and admission update for one new Research Run."""
+    prior_artifact_run_id = state.get("artifact_run_id")
+    artifact_run_id = _artifact_run_id_for_node(None, config, runtime)
+    if prior_artifact_run_id and artifact_run_id == prior_artifact_run_id:
+        raise _ResearchRunLifecycleConflict(
+            "A new Research Run requires a fresh Artifact namespace"
+        )
+    manifest_reset: GroundingManifest | None | Overwrite
+    if "grounding_manifest" in state:
+        manifest_reset = Overwrite(None)
+    else:
+        # A reducer channel with no prior value stores its first value directly;
+        # wrapping that absent first value would persist the wrapper itself.
+        manifest_reset = None
+    return {
+        "supervisor_messages": Overwrite([]),
+        "medical_research_brief": None,
+        "research_brief": None,
+        "research_results": Overwrite([]),
+        "raw_notes": Overwrite([]),
+        "notes": Overwrite([]),
+        "final_report": "",
+        "grounding_manifest": manifest_reset,
+        "global_synthesis_status": None,
+        "global_synthesis_issues": Overwrite([]),
+        "v2_shadow_report": None,
+        "artifact_run_id": artifact_run_id,
+        "research_run_status": ResearchRunStatus.ACTIVE,
+        "research_run_input_cursor": current_human_count,
+    }
+
+
+def _bootstrap_or_resume_research_run(
+    state: AgentState,
+    config: RunnableConfig,
+    runtime: Runtime[Any] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Admit at most one Human occurrence according to the frozen P01 lifecycle.
+
+    The boolean result tells the entry node to end without any EvidenceFlow-owned
+    update. All conflicts are detected before a reset, cursor advance, or provenance
+    mutation is returned to LangGraph.
+    """
+    current_human_count = sum(
+        isinstance(message, HumanMessage) for message in state.get("messages", [])
+    )
+    status = state.get("research_run_status")
+    cursor = state.get("research_run_input_cursor")
+
+    if status is None and cursor is None:
+        if current_human_count != 1:
+            raise _ResearchRunLifecycleConflict(
+                "Initial Research Run admission requires exactly one HumanMessage"
+            )
+        return (
+            _new_research_run_update(
+                state=state,
+                current_human_count=current_human_count,
+                config=config,
+                runtime=runtime,
+            ),
+            False,
+        )
+
+    if (
+        not isinstance(status, ResearchRunStatus)
+        or not isinstance(cursor, int)
+        or isinstance(cursor, bool)
+        or cursor < 0
+        or not state.get("artifact_run_id")
+    ):
+        raise _ResearchRunLifecycleConflict(
+            "Research Run lifecycle State is internally inconsistent"
+        )
+
+    fresh_delta = current_human_count - cursor
+    if fresh_delta < 0 or fresh_delta > 1:
+        raise _ResearchRunLifecycleConflict(
+            "Research Run input occurrence count conflicts with the lifecycle cursor"
+        )
+
+    if status is ResearchRunStatus.ACTIVE:
+        if fresh_delta != 0:
+            raise _ResearchRunLifecycleConflict(
+                "Mid-run HumanMessage steering is not supported"
+            )
+        return {}, False
+
+    if status is ResearchRunStatus.AWAITING_CLARIFICATION:
+        if fresh_delta == 0:
+            return {}, True
+        return {
+            "research_run_status": ResearchRunStatus.ACTIVE,
+            "research_run_input_cursor": current_human_count,
+        }, False
+
+    if status is ResearchRunStatus.FINALIZED:
+        if fresh_delta == 0:
+            return {}, True
+        return (
+            _new_research_run_update(
+                state=state,
+                current_human_count=current_human_count,
+                config=config,
+                runtime=runtime,
+            ),
+            False,
+        )
+
+    raise _ResearchRunLifecycleConflict("Unknown Research Run lifecycle status")
 
 
 def _research_model_runtime_config(
@@ -663,16 +790,33 @@ async def clarify_with_user(
     Returns:
         Command to either end with a clarifying question or proceed to research brief
     """
+    lifecycle_update, should_end = _bootstrap_or_resume_research_run(
+        state,
+        config,
+        runtime,
+    )
+    if should_end:
+        return Command(goto=END)
+
     # Step 1: Check if clarification is enabled in configuration
     configurable = Configuration.from_runnable_config(config)
-    # This node owns a fresh top-level invocation. Do not reuse an identity that may
-    # remain in checkpointed conversation state from an earlier completed run.
-    artifact_run_id = _artifact_run_id_for_node(None, config, runtime)
+    artifact_run_id = lifecycle_update.get(
+        "artifact_run_id",
+        state.get("artifact_run_id"),
+    )
+    if not isinstance(artifact_run_id, str):
+        raise _ResearchRunLifecycleConflict(
+            "Admitted Research Run does not have an Artifact namespace"
+        )
     if not configurable.allow_clarification:
         # Skip clarification step and proceed directly to research
         return Command(
             goto="write_research_brief",
-            update={"artifact_run_id": artifact_run_id},
+            update={
+                **lifecycle_update,
+                "artifact_run_id": artifact_run_id,
+                "research_run_status": ResearchRunStatus.ACTIVE,
+            },
         )
     
     # Step 2: Prepare the model for structured clarification analysis
@@ -700,8 +844,10 @@ async def clarify_with_user(
         return Command(
             goto=END, 
             update={
+                **lifecycle_update,
                 "messages": [AIMessage(content=response.question)],
                 "artifact_run_id": artifact_run_id,
+                "research_run_status": ResearchRunStatus.AWAITING_CLARIFICATION,
             },
         )
     else:
@@ -709,8 +855,10 @@ async def clarify_with_user(
         return Command(
             goto="write_research_brief", 
             update={
+                **lifecycle_update,
                 "messages": [AIMessage(content=response.verification)],
                 "artifact_run_id": artifact_run_id,
+                "research_run_status": ResearchRunStatus.ACTIVE,
             },
         )
 
@@ -1743,7 +1891,10 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
     """
     # Step 1: Extract research findings and prepare state cleanup
     notes = state.get("notes", [])
-    cleared_state = {"notes": {"type": "override", "value": []}}
+    cleared_state = {
+        "notes": {"type": "override", "value": []},
+        "research_run_status": ResearchRunStatus.FINALIZED,
+    }
     findings = "\n".join(notes)
     
     # Step 2: Configure the final report generation model
@@ -1821,6 +1972,39 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
         **cleared_state
     }
 
+
+async def global_synthesis(
+    state: AgentState, config: RunnableConfig
+) -> dict[str, Any]:
+    """Apply one typed global synthesis outcome as a bounded Parent State update."""
+    existing_manifest = state.get("grounding_manifest")
+    existing_issues = state.get("global_synthesis_issues", [])
+    try:
+        outcome = await run_global_synthesis(
+            medical_research_brief=state.get("medical_research_brief"),
+            research_results=state.get("research_results", []),
+            artifact_run_id=state.get("artifact_run_id"),
+            config=config,
+            existing_manifest=existing_manifest,
+            existing_shadow_report=state.get("v2_shadow_report"),
+            existing_status=state.get("global_synthesis_status"),
+            existing_issues=existing_issues,
+        )
+    except Exception as error:
+        outcome = _contained_pipeline_failure(
+            error=error,
+            existing_manifest=existing_manifest,
+            existing_issues=existing_issues,
+        )
+    update: dict[str, Any] = {
+        "global_synthesis_status": outcome.status,
+        "global_synthesis_issues": list(outcome.issues),
+        "v2_shadow_report": outcome.shadow_report,
+    }
+    if outcome.manifest is not None:
+        update["grounding_manifest"] = outcome.manifest
+    return update
+
 # Main Deep Researcher Graph Construction
 # Creates the complete deep research workflow from user input to final report
 deep_researcher_builder = StateGraph(
@@ -1833,11 +2017,13 @@ deep_researcher_builder = StateGraph(
 deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)           # User clarification phase
 deep_researcher_builder.add_node("write_research_brief", write_research_brief)     # Research planning phase
 deep_researcher_builder.add_node("research_supervisor", supervisor_subgraph)       # Research execution phase
+deep_researcher_builder.add_node("global_synthesis", global_synthesis)             # V2 shadow synthesis
 deep_researcher_builder.add_node("final_report_generation", final_report_generation)  # Report generation phase
 
 # Define main workflow edges for sequential execution
 deep_researcher_builder.add_edge(START, "clarify_with_user")                       # Entry point
-deep_researcher_builder.add_edge("research_supervisor", "final_report_generation") # Research to report
+deep_researcher_builder.add_edge("research_supervisor", "global_synthesis")        # Research to V2 synthesis
+deep_researcher_builder.add_edge("global_synthesis", "final_report_generation")    # V2 to V1 report
 deep_researcher_builder.add_edge("final_report_generation", END)                   # Final exit point
 
 # Compile the complete deep researcher workflow

@@ -1,5 +1,42 @@
 """System prompts and prompt templates for the Deep Research agent."""
 
+CLAIM_GENERATION_PROMPT = """You are the bounded Claim Generator for EvidenceFlow.
+
+Create complete factual Claim propositions from only the supplied visible Findings.
+Each Claim must include its scope and qualifiers when material, and may reference only
+the task-qualified FindingRefs present in the input. Evidence excerpts are context for
+accurate scope and qualification; they are not output reference authority.
+
+Return Claim semantics and FindingRefs only. Do not create claim IDs, EvidenceRefs,
+Grounding judgments, Citations, hidden reasoning, or facts beyond the supplied input.
+
+Bounded synthesis input:
+{projection}
+"""
+
+GROUNDING_JUDGE_PROMPT = """You are the bounded EvidenceFlow Grounding Judge.
+
+Judge the complete Claim proposition (text, scope, and qualifiers) against only the
+admitted Evidence views. Return one overall verdict: supported, insufficient, or
+contradicted; the material supporting and contradicting EvidenceRefs; and a concise
+reason. Do not create Evidence, final GroundingStatus, Citations, or hidden reasoning.
+
+Claim and admitted Evidence:
+{projection}
+"""
+
+SHADOW_RENDERER_PROMPT = """You are the EvidenceFlow shadow report Renderer.
+
+Choose the section count, titles, order, paragraph organization, and prose. Every body
+paragraph must bind one or more eligible Claim IDs. Preserve each complete Claim's
+scope and qualifiers, use only admitted supporting/conflicting Evidence, and discuss
+meaningful conflict explicitly. Do not output Citation identities or numbers, invent
+unavailable Sources, alter Evidence roles, or modify Grounding semantics.
+
+Bounded eligible Claim packages:
+{projection}
+"""
+
 clarify_with_user_instructions="""
 These are the messages that have been exchanged so far from the user asking for the report:
 <Messages>

@@ -315,7 +315,10 @@ async def test_default_artifact_namespace_survives_supervisor_iterations(
     assert namespace_ids[4:8] == ["explicit-shared-run"] * 4
 
     new_root = await runtime.clarify_with_user(
-        {"messages": [], "artifact_run_id": "earlier-completed-run"},
+        {
+            "messages": [HumanMessage(content="Start another research run")],
+            "artifact_run_id": "earlier-completed-run",
+        },
         {"configurable": {"allow_clarification": False}},
     )
     assert new_root.update["artifact_run_id"] != "earlier-completed-run"

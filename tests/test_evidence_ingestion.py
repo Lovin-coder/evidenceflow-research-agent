@@ -1,5 +1,7 @@
 """Deterministic regression tests for the P2-S4 Evidence ingestion boundary."""
 
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
@@ -265,6 +267,74 @@ def test_host_materializes_exact_deterministic_evidence_and_empty_selection(tmp_
         selection=WebpageSelection(summary="No useful Evidence.", selected_chunk_ids=[]),
         artifact_store=store,
     ) == []
+
+
+def test_source_metadata_enrichment_is_validated_and_identity_neutral(tmp_path) -> None:
+    """Keep best-effort metadata compact without changing Source provenance identity."""
+    normalized = normalize_source_text(medical_document())
+    store = LocalFileArtifactStore(tmp_path, "run-one")
+    artifact_ref = store.put_text(normalized)
+    retrieved_at = datetime(2026, 8, 29, 12, 30, tzinfo=timezone.utc)
+
+    enriched = build_source_record(
+        url="https://example.test/guideline",
+        title="Guideline",
+        provider="tavily",
+        artifact_ref=artifact_ref,
+        normalized_text=normalized,
+        retrieved_at=retrieved_at,
+        published_at="2025-04-18",
+        publisher="  Clinical Society  ",
+        authors="A. Researcher; B. Reviewer",
+        document_type="Clinical guideline",
+    )
+    minimal = build_source_record(
+        url="https://example.test/guideline",
+        title="Guideline",
+        provider="tavily",
+        artifact_ref=artifact_ref,
+        normalized_text=normalized,
+        retrieved_at=retrieved_at,
+    )
+
+    assert enriched.metadata == {
+        "provider": "tavily",
+        "title": "Guideline",
+        "retrieved_at": "2026-08-29T12:30:00+00:00",
+        "url": "https://example.test/guideline",
+        "published_at": "2025-04-18",
+        "publisher": "Clinical Society",
+        "authors": "A. Researcher; B. Reviewer",
+        "document_type": "Clinical guideline",
+    }
+    assert enriched.source_id == minimal.source_id
+    assert enriched.artifact_ref == minimal.artifact_ref
+    assert "retrieval_score" not in enriched.metadata
+
+
+def test_source_metadata_omits_malformed_optional_provider_values(tmp_path) -> None:
+    """Omit invalid provider metadata rather than fabricating semantic repairs."""
+    normalized = normalize_source_text(medical_document())
+    store = LocalFileArtifactStore(tmp_path, "run-one")
+    source = build_source_record(
+        url="https://example.test/guideline",
+        title="Guideline",
+        provider="tavily",
+        artifact_ref=store.put_text(normalized),
+        normalized_text=normalized,
+        retrieved_at=datetime(2026, 8, 29, tzinfo=timezone.utc),
+        published_at="not-a-date",
+        publisher=42,
+        authors=" ",
+        document_type="x" * 1_001,
+    )
+
+    assert source.metadata == {
+        "provider": "tavily",
+        "title": "Guideline",
+        "retrieved_at": "2026-08-29T00:00:00+00:00",
+        "url": "https://example.test/guideline",
+    }
 
 
 def test_provenance_validator_rejects_wrong_source_excerpt_and_hash(tmp_path) -> None:

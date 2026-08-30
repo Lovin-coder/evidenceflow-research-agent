@@ -147,7 +147,8 @@ def test_graph_topology_matches_frozen_supervisor_researcher_loop() -> None:
         ("clarify_with_user", "__end__"),
         ("clarify_with_user", "write_research_brief"),
         ("write_research_brief", "research_supervisor"),
-        ("research_supervisor", "final_report_generation"),
+        ("research_supervisor", "global_synthesis"),
+        ("global_synthesis", "final_report_generation"),
         ("final_report_generation", "__end__"),
     }
     assert _edges(supervisor_subgraph) == {

@@ -6,6 +6,8 @@ import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from langchain_core.language_models import BaseChatModel
@@ -26,6 +28,8 @@ MAX_CANDIDATE_CHARS = 1_800
 MIN_TAIL_CHARS = 275
 MAX_SELECTED_CHUNKS_PER_SOURCE = 4
 MIN_USABLE_SOURCE_CHARS = 20
+_MAX_OPTIONAL_SOURCE_METADATA_CHARS = 1_000
+_MAX_PUBLISHED_AT_CHARS = 128
 _LOCATOR_PATTERN = re.compile(r"char:(?P<start>\d+)-(?P<end>\d+)\Z")
 _TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 
@@ -288,6 +292,11 @@ def build_source_record(
     provider: str,
     artifact_ref: str,
     normalized_text: str,
+    retrieved_at: datetime | None = None,
+    published_at: object = None,
+    publisher: object = None,
+    authors: object = None,
+    document_type: object = None,
 ) -> SourceRecord:
     """Build a stable compact Source only after usable content is persisted."""
     if not normalized_text or not artifact_ref:
@@ -302,14 +311,64 @@ def build_source_record(
     metadata = {
         "provider": provider,
         "title": title.strip() or canonical_url or "Untitled source",
+        "retrieved_at": _serialize_retrieval_timestamp(retrieved_at),
     }
     if canonical_url:
         metadata["url"] = canonical_url
+    optional_metadata = {
+        "published_at": _validated_published_at(published_at),
+        "publisher": _validated_optional_metadata_value(publisher),
+        "authors": _validated_optional_metadata_value(authors),
+        "document_type": _validated_optional_metadata_value(document_type),
+    }
+    metadata.update(
+        {key: value for key, value in optional_metadata.items() if value is not None}
+    )
     return SourceRecord(
         source_id=f"source:sha256:{source_digest}",
         artifact_ref=artifact_ref,
         metadata=metadata,
     )
+
+
+def _serialize_retrieval_timestamp(retrieved_at: datetime | None) -> str:
+    """Serialize one Host-owned retrieval timestamp in UTC."""
+    timestamp = retrieved_at or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise EvidenceIngestionError("retrieved_at must be timezone-aware")
+    return timestamp.astimezone(timezone.utc).isoformat()
+
+
+def _validated_optional_metadata_value(value: object) -> str | None:
+    """Admit only compact provider strings without inventing missing metadata."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > _MAX_OPTIONAL_SOURCE_METADATA_CHARS
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        return None
+    return normalized
+
+
+def _validated_published_at(value: object) -> str | None:
+    """Preserve a compact provider publication date only when it parses reliably."""
+    normalized = _validated_optional_metadata_value(value)
+    if normalized is None or len(normalized) > _MAX_PUBLISHED_AT_CHARS:
+        return None
+    try:
+        date.fromisoformat(normalized)
+    except ValueError:
+        try:
+            datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsedate_to_datetime(normalized)
+            except (TypeError, ValueError, OverflowError):
+                return None
+    return normalized
 
 
 def materialize_evidence(

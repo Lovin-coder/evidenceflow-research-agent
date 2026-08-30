@@ -162,6 +162,7 @@ async def execute_tavily_search_structured(
             include_raw_content=True,
             config=config,
         )
+    retrieved_at = datetime.now(timezone.utc)
 
     configurable = Configuration.from_runnable_config(config)
     store = artifact_store or artifact_store_from_config(config, artifact_run_id)
@@ -311,6 +312,8 @@ async def execute_tavily_search_structured(
             provider="tavily",
             artifact_ref=artifact_ref,
             normalized_text=normalized_text,
+            retrieved_at=retrieved_at,
+            published_at=provider_result.get("published_date"),
         )
         candidates = chunk_source_text(normalized_text)
         try:

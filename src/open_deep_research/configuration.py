@@ -77,6 +77,11 @@ class Configuration(BaseModel):
             }
         }
     )
+    max_concurrent_grounding_judgments: int = Field(
+        default=4,
+        ge=1,
+        description="Maximum concurrent independent Claim grounding judgments.",
+    )
     # Research Configuration
     search_api: SearchAPI = Field(
         default=SearchAPI.TAVILY,
