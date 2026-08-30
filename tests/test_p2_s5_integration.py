@@ -1,0 +1,117 @@
+"""Focused Parent graph integration tests for the P2-S5 shadow pipeline."""
+
+from __future__ import annotations
+
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage
+
+import open_deep_research.deep_researcher as runtime
+from open_deep_research.domain_models import GroundingManifest
+from open_deep_research.global_synthesis.types import GlobalSynthesisOutcome
+from open_deep_research.state import GlobalSynthesisStatus, ResearchRunStatus
+
+
+def _edges(graph) -> set[tuple[str, str]]:
+    return {(edge.source, edge.target) for edge in graph.get_graph().edges}
+
+
+def test_parent_graph_adds_only_the_frozen_global_synthesis_node() -> None:
+    assert _edges(runtime.deep_researcher) == {
+        ("__start__", "clarify_with_user"),
+        ("clarify_with_user", "__end__"),
+        ("clarify_with_user", "write_research_brief"),
+        ("write_research_brief", "research_supervisor"),
+        ("research_supervisor", "global_synthesis"),
+        ("global_synthesis", "final_report_generation"),
+        ("final_report_generation", "__end__"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_parent_node_applies_one_bounded_update_without_erasing_v1_inputs(
+    monkeypatch,
+) -> None:
+    manifest = GroundingManifest(claims=[], groundings=[], citations=[])
+
+    async def fake_pipeline(**_kwargs):
+        return GlobalSynthesisOutcome(
+            manifest=manifest,
+            shadow_report="shadow",
+            status=GlobalSynthesisStatus.SUCCESS,
+            issues=(),
+            metrics=None,
+        )
+
+    monkeypatch.setattr(runtime, "run_global_synthesis", fake_pipeline)
+    state = {
+        "messages": [HumanMessage(content="question")],
+        "research_results": [],
+        "raw_notes": ["raw preserved"],
+        "notes": ["note preserved"],
+        "final_report": "v1 preserved",
+        "global_synthesis_issues": [],
+    }
+    update = await runtime.global_synthesis(state, {})
+
+    assert update == {
+        "grounding_manifest": manifest,
+        "global_synthesis_status": GlobalSynthesisStatus.SUCCESS,
+        "global_synthesis_issues": [],
+        "v2_shadow_report": "shadow",
+    }
+    assert state["raw_notes"] == ["raw preserved"]
+    assert state["notes"] == ["note preserved"]
+    assert state["final_report"] == "v1 preserved"
+
+
+@pytest.mark.asyncio
+async def test_unexpected_v2_failure_is_contained_and_v1_inputs_survive(
+    monkeypatch,
+) -> None:
+    async def fail(**_kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(runtime, "run_global_synthesis", fail)
+    state = {
+        "messages": [HumanMessage(content="question")],
+        "research_results": [],
+        "raw_notes": ["raw preserved"],
+        "notes": ["note preserved"],
+        "global_synthesis_issues": [],
+    }
+    update = await runtime.global_synthesis(state, {})
+
+    assert update["global_synthesis_status"] is GlobalSynthesisStatus.FAILED
+    assert "grounding_manifest" not in update
+    assert state["raw_notes"] == ["raw preserved"]
+    assert state["notes"] == ["note preserved"]
+
+
+class _WriterModel:
+    def __init__(self, *, error=None) -> None:
+        self.error = error
+
+    def with_config(self, _config):
+        return self
+
+    async def ainvoke(self, _request):
+        if self.error:
+            raise self.error
+        return AIMessage(content="V1 report")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [None, RuntimeError("provider failed")])
+async def test_controlled_v1_terminal_paths_finalize_run(monkeypatch, error) -> None:
+    monkeypatch.setattr(runtime, "configurable_model", _WriterModel(error=error))
+    output = await runtime.final_report_generation(
+        {
+            "messages": [HumanMessage(content="question")],
+            "research_brief": "brief",
+            "notes": ["legacy note"],
+        },
+        {},
+    )
+
+    assert output["research_run_status"] is ResearchRunStatus.FINALIZED
+    assert isinstance(output["final_report"], str)

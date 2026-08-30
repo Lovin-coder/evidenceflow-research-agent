@@ -1,7 +1,7 @@
 """EvidenceFlow v1 domain contracts.
 
 These models describe stable business boundaries. They intentionally do not
-model LangGraph process state, provider payloads, claims, citations, or stores.
+model LangGraph process state, provider payloads, model drafts, or stores.
 """
 
 import json
@@ -406,6 +406,137 @@ class ResearchTaskResult(ContractModel):
             raise ValueError(
                 "ResearchTaskResult provenance payload must not exceed "
                 f"{MAX_RESULT_PROVENANCE_SERIALIZED_CHARS} serialized characters"
+            )
+        return self
+
+
+class EvidenceRef(ContractModel):
+    """Address one Evidence record within its owning research task result."""
+
+    task_id: NonEmptyText = Field(
+        description="Identity of the ResearchTaskResult owning the Evidence record."
+    )
+    evidence_id: NonEmptyText = Field(
+        description="Task-local identity of the addressed Evidence record."
+    )
+
+
+class FindingRef(ContractModel):
+    """Address one Finding within its owning research task result."""
+
+    task_id: NonEmptyText = Field(
+        description="Identity of the ResearchTaskResult owning the Finding."
+    )
+    finding_id: NonEmptyText = Field(
+        description="Task-local identity of the addressed Finding."
+    )
+
+
+class ClaimMateriality(str, Enum):
+    """Represent a Claim's importance to the user's core question."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class ClaimRecord(ContractModel):
+    """Represent one Host-materialized authoritative synthesis Claim."""
+
+    claim_id: NonEmptyText = Field(
+        description="Host-assigned identity unique within the owning Manifest."
+    )
+    text: NonEmptyText = Field(
+        description="Bounded factual proposition proposed for V2 report space."
+    )
+    materiality: ClaimMateriality = Field(
+        description="Importance of the Claim to the user's core question."
+    )
+    finding_refs: list[FindingRef] = Field(
+        min_length=1,
+        description="Non-empty task-qualified Finding lineage for this Claim."
+    )
+    scope: NonEmptyText | None = Field(
+        default=None,
+        description="Optional population, condition, or applicability boundary."
+    )
+    qualifiers: list[NonEmptyText] = Field(
+        description="Limitations that authoritative expression of the Claim must retain."
+    )
+
+
+class GroundingStatus(str, Enum):
+    """Represent the Host-materialized grounding state of a Claim."""
+
+    SUPPORTED = "supported"
+    SUPPORTED_WITH_CONFLICT = "supported_with_conflict"
+    INSUFFICIENT = "insufficient"
+    CONTRADICTED = "contradicted"
+    UNASSESSED = "unassessed"
+
+
+class ClaimGroundingRecord(ContractModel):
+    """Represent the authoritative grounding assessment for one Claim."""
+
+    claim_id: NonEmptyText = Field(
+        description="Identity of the Claim assessed by this record."
+    )
+    evaluated_evidence_refs: list[EvidenceRef] = Field(
+        description="Ordered Evidence inputs used for the valid semantic assessment."
+    )
+    supporting_evidence_refs: list[EvidenceRef] = Field(
+        description="Evaluated Evidence providing material positive support."
+    )
+    contradicting_evidence_refs: list[EvidenceRef] = Field(
+        description="Evaluated Evidence providing material negative evidence."
+    )
+    status: GroundingStatus = Field(
+        description="Host-materialized semantic or unassessed grounding state."
+    )
+    reason: NonEmptyText | None = Field(
+        default=None,
+        description="Optional bounded semantic explanation for an assessed status."
+    )
+
+
+class Citation(ContractModel):
+    """Represent one canonical Claim-to-Evidence provenance handle."""
+
+    citation_id: NonEmptyText = Field(
+        description="Host-assigned identity for the canonical Claim/Evidence pair."
+    )
+    claim_id: NonEmptyText = Field(
+        description="Identity of the report-eligible Claim being cited."
+    )
+    evidence_ref: EvidenceRef = Field(
+        description="Task-qualified Evidence address supporting this Citation."
+    )
+
+
+class GroundingManifest(ContractModel):
+    """Represent the authoritative P2-S5 structured shadow output."""
+
+    contract_version: NonEmptyText = Field(
+        default=CONTRACT_VERSION,
+        frozen=True,
+        description="Serialized EvidenceFlow contract version for this Manifest."
+    )
+    claims: list[ClaimRecord] = Field(
+        description="Canonical ordered Claims materialized for Global Synthesis."
+    )
+    groundings: list[ClaimGroundingRecord] = Field(
+        description="Canonical ordered grounding records corresponding to Claims."
+    )
+    citations: list[Citation] = Field(
+        description="Canonical ordered Citations for report-eligible Claims."
+    )
+
+    @model_validator(mode="after")
+    def require_contract_version(self) -> "GroundingManifest":
+        """Reject a Manifest serialized against any non-canonical contract version."""
+        if self.contract_version != CONTRACT_VERSION:
+            raise ValueError(
+                f"GroundingManifest contract_version must be {CONTRACT_VERSION!r}"
             )
         return self
 

@@ -1732,115 +1732,115 @@ Verify Host enforcement for：
 
 ### S5-R01
 
-- [ ] Global Synthesis authority comes only from Brief + structured Results。
-- [ ] V2 failure does not alter valid S4 Results。
+- [x] Global Synthesis authority comes only from Brief + structured Results。
+- [x] V2 failure does not alter valid S4 Results。
 
 ### S5-R02
 
-- [ ] Claim-first authority chain。
-- [ ] no report-first authoritative extraction。
+- [x] Claim-first authority chain。
+- [x] no report-first authoritative extraction。
 
 ### S5-R03
 
-- [ ] all global references task-qualified。
-- [ ] no sibling scan。
+- [x] all global references task-qualified。
+- [x] no sibling scan。
 
 ### S5-R04
 
-- [ ] Host materializes Claims。
-- [ ] FindingRefs non-empty。
-- [ ] sibling-stable identity。
-- [ ] exact-only dedup。
+- [x] Host materializes Claims。
+- [x] FindingRefs non-empty。
+- [x] sibling-stable identity。
+- [x] exact-only dedup。
 
 ### S5-R05
 
-- [ ] Judge universe derived from retained Findings。
-- [ ] Model A/B allowlists separate。
-- [ ] Model B cannot enlarge universe。
+- [x] Judge universe derived from retained Findings。
+- [x] Model A/B allowlists separate。
+- [x] Model B cannot enlarge universe。
 
 ### S5-R06
 
-- [ ] Judge verdict + material subsets follow frozen semantics。
-- [ ] reason non-authoritative。
+- [x] Judge verdict + material subsets follow frozen semantics。
+- [x] reason non-authoritative。
 
 ### S5-R07
 
-- [ ] one Grounding per Claim。
-- [ ] five-state mapping。
-- [ ] strict UNASSESSED。
+- [x] one Grounding per Claim。
+- [x] five-state mapping。
+- [x] strict UNASSESSED。
 
 ### S5-R08
 
-- [ ] eligibility derived from status。
-- [ ] conflict Claim reportable。
-- [ ] no automatic Claim repair。
+- [x] eligibility derived from status。
+- [x] conflict Claim reportable。
+- [x] no automatic Claim repair。
 
 ### S5-R09
 
-- [ ] exact Citation set。
-- [ ] display grouping does not modify canonical identity。
+- [x] exact Citation set。
+- [x] display grouping does not modify canonical identity。
 
 ### S5-R10
 
-- [ ] Manifest aggregate valid。
-- [ ] atomic publication。
-- [ ] no partial merge。
+- [x] Manifest aggregate valid。
+- [x] atomic publication。
+- [x] no partial merge。
 
 ### S5-R11
 
-- [ ] Model/Host authority boundaries intact。
-- [ ] Model A/B/C valid semantic negatives no retry-to-pass。
-- [ ] evaluator valid semantic FAIL no retry-to-pass。
+- [x] Model/Host authority boundaries intact。
+- [x] Model A/B/C valid semantic negatives no retry-to-pass。
+- [x] evaluator valid semantic FAIL no retry-to-pass。
 
 ### S5-R12
 
-- [ ] Gate validate-not-repair。
-- [ ] invalid aggregate not published。
+- [x] Gate validate-not-repair。
+- [x] invalid aggregate not published。
 
 ### S5-R13
 
-- [ ] SUCCESS/PARTIAL/FAILED semantics exact。
-- [ ] status uses sticky degradation fact。
+- [x] SUCCESS/PARTIAL/FAILED semantics exact。
+- [x] status uses sticky degradation fact。
 
 ### S5-R14
 
-- [ ] all model inputs/outputs bounded。
-- [ ] Claim, Evidence, Citation, Manifest and final report bounds enforced by their owning Tasks。
-- [ ] whole-unit deterministic admission。
-- [ ] canonical order independent of async/unordered containers。
+- [x] all model inputs/outputs bounded。
+- [x] Claim, Evidence, Citation, Manifest and final report bounds enforced by their owning Tasks。
+- [x] whole-unit deterministic admission。
+- [x] canonical order independent of async/unordered containers。
 
 ### S5-R15
 
-- [ ] Model C owns bounded section structure。
-- [ ] body paragraphs Claim-bound。
-- [ ] all eligible Claims covered。
-- [ ] material Evidence only。
-- [ ] conflict marker/Citations visible。
-- [ ] zero eligible skips Model C。
+- [x] Model C owns bounded section structure。
+- [x] body paragraphs Claim-bound。
+- [x] all eligible Claims covered。
+- [x] material Evidence only。
+- [x] conflict marker/Citations visible。
+- [x] zero eligible skips Model C。
 
 ### S5-R16
 
-- [ ] graph-external faithfulness evaluator exists。
-- [ ] six dimensions covered。
-- [ ] runtime unaffected。
+- [x] graph-external faithfulness evaluator exists。
+- [x] six dimensions covered。
+- [x] runtime unaffected。
 
 ### S5-R17
 
-- [ ] required metrics recomputable。
-- [ ] zero denominator `None`。
-- [ ] metrics non-authoritative。
+- [x] required metrics recomputable。
+- [x] zero denominator `None`。
+- [x] metrics non-authoritative。
 
 ### S5-R18
 
-- [ ] only `global_synthesis` new Parent orchestration node。
-- [ ] V1 preserved。
-- [ ] no forbidden latency-isolation topology。
+- [x] only `global_synthesis` new Parent orchestration node。
+- [x] V1 preserved。
+- [x] no forbidden latency-isolation topology。
 
 ### S5-R19
 
-- [ ] same logical Run preserves namespace。
-- [ ] new Run resets structured provenance before admission。
-- [ ] conversation context does not imply provenance reuse。
+- [x] same logical Run preserves namespace。
+- [x] new Run resets structured provenance before admission。
+- [x] conversation context does not imply provenance reuse。
 
 Requirement gate：
 
@@ -1848,7 +1848,7 @@ Requirement gate：
 S5-R01–R19 PASS count = 19 / 19
 ```
 
-- [ ] PASS。
+- [x] PASS。
 
 ---
 
@@ -1858,22 +1858,22 @@ Existing I1–I12 upstream invariants must remain intact。
 
 P2-S5-specific emphasis：
 
-- [ ] I13 — Cross-task references are task-qualified and never resolved by sibling scan。
-- [ ] I14 — Claim identity, proposition and materialization are Host-owned。
-- [ ] I15 — Claim lineage and Evidence Grounding remain separate。
-- [ ] I16 — The evaluated Evidence universe is Host-owned and exact for every valid assessment。
-- [ ] I17 — Supporting and contradicting Evidence are valid material disjoint subsets。
-- [ ] I18 — Claim-level status preserves the Judge overall semantic verdict。
-- [ ] I19 — `UNASSESSED` records execution/validation failure, not insufficiency。
-- [ ] I20 — Citation completeness is exact for every report-eligible Claim。
-- [ ] I21 — Manifest publication is atomic and validates the whole aggregate。
-- [ ] I22 — Canonical collection ordering is independent from async completion timing。
-- [ ] I23 — The V2 renderer cannot become a second factual authority。
-- [ ] I24 — Active structured provenance is isolated by Research Run。
+- [x] I13 — Cross-task references are task-qualified and never resolved by sibling scan。
+- [x] I14 — Claim identity, proposition and materialization are Host-owned。
+- [x] I15 — Claim lineage and Evidence Grounding remain separate。
+- [x] I16 — The evaluated Evidence universe is Host-owned and exact for every valid assessment。
+- [x] I17 — Supporting and contradicting Evidence are valid material disjoint subsets。
+- [x] I18 — Claim-level status preserves the Judge overall semantic verdict。
+- [x] I19 — `UNASSESSED` records execution/validation failure, not insufficiency。
+- [x] I20 — Citation completeness is exact for every report-eligible Claim。
+- [x] I21 — Manifest publication is atomic and validates the whole aggregate。
+- [x] I22 — Canonical collection ordering is independent from async completion timing。
+- [x] I23 — The V2 renderer cannot become a second factual authority。
+- [x] I24 — Active structured provenance is isolated by Research Run。
 
 No Contract invariant has been weakened to make implementation easier：
 
-- [ ] PASS。
+- [x] PASS。
 
 ---
 
@@ -1884,66 +1884,66 @@ No Contract invariant has been weakened to make implementation easier：
 Record：
 
 ```text
-credentials available =
-provider endpoint available =
-network available =
-Model A config available =
-Model B config available =
-Model C config available =
-evaluator config available =
+credentials available = YES
+provider endpoint available = YES
+network available = YES through the approved unrestricted path; sandbox SOCKS path unavailable
+Model A config available = YES — openai:qwen3.7-plus-2026-05-26
+Model B config available = YES — openai:qwen3.7-plus-2026-05-26
+Model C config available = YES — openai:qwen3.7-plus-2026-05-26
+evaluator config available = YES — frozen default gpt-4.1; endpoint model unavailable
 ```
 
 ### 33.2 Required runtime smoke
 
 If environment available：
 
-- [ ] Model A executes。
-- [ ] materialized Claim set non-empty 时，Model B 对具有 admitted Evidence universe 的 Claims 按 frozen semantics
+- [x] Model A executes。
+- [x] materialized Claim set non-empty 时，Model B 对具有 admitted Evidence universe 的 Claims 按 frozen semantics
   执行。
 - [ ] empty admitted Evidence universe 的 Claim 按 strict UNASSESSED path 处理。
 - [ ] Claim set 合法为空时，legal empty-Claim path 已验证，且未为 smoke 强制调用 Model B。
-- [ ] smoke 未人工制造 Claim 或 Evidence。
-- [ ] Publication Gate PASSes。
-- [ ] report-eligible Claims non-empty 时，Model C MUST execute，且 Host Renderer finalization MUST complete。
+- [x] smoke 未人工制造 Claim 或 Evidence。
+- [x] Publication Gate PASSes。
+- [x] report-eligible Claims non-empty 时，Model C MUST execute，且 Host Renderer finalization MUST complete。
 - [ ] report-eligible Claims empty 时，Model C MUST NOT execute，且 Host deterministic zero-eligible output MUST
   succeed。
-- [ ] V2 Shadow Report generated OR deterministic zero-eligible output generated。
-- [ ] V1 path remains available。
+- [x] V2 Shadow Report generated OR deterministic zero-eligible output generated。
+- [x] V1 path remains available。
 
 Record：
 
 ```text
-Claim count =
-SUPPORTED =
-SUPPORTED_WITH_CONFLICT =
-INSUFFICIENT =
-CONTRADICTED =
-UNASSESSED =
-Citation count =
-Manifest Gate =
-Renderer =
-GlobalSynthesisStatus =
-Issues =
-Model A latency =
-Model B latency =
-Model C latency =
-Retry/request counts =
+Claim count = 2
+SUPPORTED = 2
+SUPPORTED_WITH_CONFLICT = 0
+INSUFFICIENT = 0
+CONTRADICTED = 0
+UNASSESSED = 0
+Citation count = 2
+Manifest Gate = PASS
+Renderer = MODEL_C_PASS
+GlobalSynthesisStatus = SUCCESS
+Issues = none
+Model A latency = 25.881s
+Model B latency = 7.306s and 9.632s for two Claim-local requests
+Model C latency = 50.499s
+Retry/request counts = A 0/1; B 0/2; C 0/1
 ```
 
 ### 33.3 External evaluator smoke
 
 If evaluator path/config/environment available：
 
-- [ ] evaluator live entry executes。
+- [x] evaluator live entry executes。
 - [ ] semantic verdict recorded。
-- [ ] valid evaluator FAIL not retried to PASS。
-- [ ] evaluator result does not affect runtime status。
+- [x] valid evaluator FAIL not retried to PASS（deterministic coverage; live call had no semantic verdict）。
+- [x] evaluator result does not affect runtime status。
 
 If evaluator unavailable but required runtime smoke succeeds：
 
 ```text
 Runtime Smoke Outcome = PASS
-Evaluator Smoke = UNAVAILABLE / SKIPPED_DUE_TO_ENVIRONMENT
+Evaluator Smoke = OPERATIONAL_FAILURE: NotFoundError — endpoint does not expose gpt-4.1
 ```
 
 不得把 runtime PASS 改为 SKIP；evaluator valid semantic FAIL 也不单独把 graph-external required runtime smoke
@@ -1954,24 +1954,24 @@ Evaluator Smoke = UNAVAILABLE / SKIPPED_DUE_TO_ENVIRONMENT
 Exactly one：
 
 ```text
-[ ] PASS
+[x] PASS
 [ ] FAIL
 [ ] SKIPPED_DUE_TO_ENVIRONMENT
 ```
 
 Rules：
 
-- [ ] executed required-runtime failure never converted to SKIP。
-- [ ] SKIP has concrete environment reason。
-- [ ] SKIP is not reported as PASS。
-- [ ] environment skip does not invalidate deterministic implementation verification。
-- [ ] implementation bug found by smoke returns to owning Task。
-- [ ] architecture ambiguity found by smoke reopens design rather than silently changing semantics。
+- [x] executed required-runtime failure never converted to SKIP。
+- [x] SKIP has concrete environment reason。
+- [x] SKIP is not reported as PASS。
+- [x] environment skip does not invalidate deterministic implementation verification。
+- [x] implementation bug found by smoke returns to owning Task。
+- [x] architecture ambiguity found by smoke reopens design rather than silently changing semantics。
 
 T22 Task Status：
 
 ```text
-[ ] DONE
+[x] DONE
 [ ] BLOCKED
 ```
 
@@ -1985,16 +1985,16 @@ T22 Task Status MUST NOT be DONE
 
 ## 34. Security / Diagnostics / Data Hygiene
 
-- [ ] no raw prompt persisted in issues。
-- [ ] no raw model response persisted in issues。
-- [ ] no provider payload persisted in issues。
-- [ ] no unbounded traceback persisted in issues。
-- [ ] no hidden reasoning persisted。
-- [ ] Source metadata contains no raw content aliases。
-- [ ] Artifact raw text does not enter new structured Graph State。
-- [ ] logs used for tests/smoke do not expose credentials/API keys。
-- [ ] test fixtures contain no real secrets。
-- [ ] errors are bounded/sanitized。
+- [x] no raw prompt persisted in issues。
+- [x] no raw model response persisted in issues。
+- [x] no provider payload persisted in issues。
+- [x] no unbounded traceback persisted in issues。
+- [x] no hidden reasoning persisted。
+- [x] Source metadata contains no raw content aliases。
+- [x] Artifact raw text does not enter new structured Graph State。
+- [x] logs used for tests/smoke do not expose credentials/API keys。
+- [x] test fixtures contain no real secrets。
+- [x] errors are bounded/sanitized。
 
 ---
 
@@ -2025,15 +2025,15 @@ git diff --no-index --check /dev/null path/to/untracked-file
 
 Required：
 
-- [ ] `git diff --check` PASS。
-- [ ] intended untracked files 已单独检查或已进入 tracked diff。
-- [ ] no unrelated file churn。
-- [ ] no generated/cache files accidentally included。
-- [ ] no secrets included。
-- [ ] no dependency change without Task justification。
-- [ ] no broad formatting-only rewrite mixed into S5 implementation。
-- [ ] no unexpected upstream refactor。
-- [ ] package footprint matches PLAN/TASKS。
+- [x] `git diff --check` PASS。
+- [x] intended untracked files 已单独检查或已进入 tracked diff。
+- [x] no unrelated file churn。
+- [x] no generated/cache files accidentally included。
+- [x] no secrets included。
+- [x] no dependency change without Task justification。
+- [x] no broad formatting-only rewrite mixed into S5 implementation。
+- [x] no unexpected upstream refactor。
+- [x] package footprint matches PLAN/TASKS。
 
 Search stale/forbidden patterns as applicable：
 
@@ -2053,18 +2053,18 @@ Interpretation：
 
 ## 36. Documentation Drift Audit
 
-- [ ] implementation does not contradict Contracts v1。
-- [ ] implementation does not contradict SPEC。
-- [ ] implementation matches PLAN file ownership。
-- [ ] implementation matches T00–T23 decomposition。
-- [ ] no new semantic behavior exists only in code comments。
-- [ ] no new unresolved design hidden in TODO。
-- [ ] no stale document says metadata enrichment optional task。
-- [ ] no stale document introduces `retrieval_score` metadata/quality semantics。
-- [ ] no stale document says Host owns Renderer section catalog。
-- [ ] no stale document permits mid-run steering。
-- [ ] no stale document permits Renderer repair replay。
-- [ ] no stale document permits nested request retry。
+- [x] implementation does not contradict Contracts v1。
+- [x] implementation does not contradict SPEC。
+- [x] implementation matches PLAN file ownership。
+- [x] implementation matches T00–T23 decomposition。
+- [x] no new semantic behavior exists only in code comments。
+- [x] no new unresolved design hidden in TODO。
+- [x] no stale document says metadata enrichment optional task。
+- [x] no stale document introduces `retrieval_score` metadata/quality semantics。
+- [x] no stale document says Host owns Renderer section catalog。
+- [x] no stale document permits mid-run steering。
+- [x] no stale document permits Renderer repair replay。
+- [x] no stale document permits nested request retry。
 
 Search for unresolved markers：
 
@@ -2093,47 +2093,47 @@ AND
 T22 Smoke Outcome ∈ {PASS, SKIPPED_DUE_TO_ENVIRONMENT}
 ```
 
-- [ ] T22 dependency rule satisfied。
-- [ ] completed Task IDs recorded。
-- [ ] implementation footprint recorded。
-- [ ] focused tests summary recorded。
-- [ ] full regression result recorded。
-- [ ] real-provider smoke Task Status and Smoke Outcome recorded separately。
-- [ ] external evaluator implementation and verification status recorded。
-- [ ] known non-blocking limitations recorded。
-- [ ] no Contract drift statement recorded。
-- [ ] no SPEC drift statement recorded。
-- [ ] required stale-pattern and architecture checks completed。
-- [ ] no unnecessary closeout-document system introduced。
+- [x] T22 dependency rule satisfied。
+- [x] completed Task IDs recorded。
+- [x] implementation footprint recorded。
+- [x] focused tests summary recorded。
+- [x] full regression result recorded。
+- [x] real-provider smoke Task Status and Smoke Outcome recorded separately。
+- [x] external evaluator implementation and verification status recorded。
+- [x] known non-blocking limitations recorded。
+- [x] no Contract drift statement recorded。
+- [x] no SPEC drift statement recorded。
+- [x] required stale-pattern and architecture checks completed。
+- [x] no unnecessary closeout-document system introduced。
 
 ### 37.1 T00–T23 Completion Ledger
 
 | Task | Status | Primary evidence |
 |---|---|---|
-| T00 Preflight | [ ] DONE | |
-| T01 Domain Contracts | [ ] DONE | |
-| T02 Parent State | [ ] DONE | |
-| T03 Run Lifecycle | [ ] DONE | |
-| T04 Internal Types / Retry | [ ] DONE | |
-| T05 Metadata Enrichment | [ ] DONE | |
-| T06 Resolver / Projection | [ ] DONE | |
-| T07 Model A / Claims | [ ] DONE | |
-| T08 Evidence Universe | [ ] DONE | |
-| T09 Model B Execution | [ ] DONE | |
-| T10 Grounding Materialization | [ ] DONE | |
-| T11 Citation | [ ] DONE | |
-| T12 Publication / Replay / Metrics | [ ] DONE | |
-| T13 Issues / Status | [ ] DONE | |
-| T14 Source Display | [ ] DONE | |
-| T15 Renderer Projection | [ ] DONE | |
-| T16 Model C | [ ] DONE | |
-| T17 Report Finalization | [ ] DONE | |
-| T18 Pipeline | [ ] DONE | |
-| T19 Parent Integration | [ ] DONE | |
-| T20 Faithfulness Eval | [ ] DONE | |
-| T21 Integration / Regression | [ ] DONE | |
-| T22 Provider Smoke | [ ] DONE | |
-| T23 Closeout | [ ] DONE | |
+| T00 Preflight | [x] DONE | accepted verification base and source map |
+| T01 Domain Contracts | [x] DONE | contract tests |
+| T02 Parent State | [x] DONE | reducer/state tests |
+| T03 Run Lifecycle | [x] DONE | lifecycle/checkpoint tests |
+| T04 Internal Types / Retry | [x] DONE | types/retry tests |
+| T05 Metadata Enrichment | [x] DONE | ingestion/Tavily tests |
+| T06 Resolver / Projection | [x] DONE | projection tests |
+| T07 Model A / Claims | [x] DONE | Claim tests |
+| T08 Evidence Universe | [x] DONE | Grounding admission tests |
+| T09 Model B Execution | [x] DONE | concurrency/isolation tests |
+| T10 Grounding Materialization | [x] DONE | five-state Grounding tests |
+| T11 Citation | [x] DONE | publication tests |
+| T12 Publication / Replay / Metrics | [x] DONE | Gate/replay/metrics tests |
+| T13 Issues / Status | [x] DONE | status/reconciliation tests |
+| T14 Source Display | [x] DONE | display tests |
+| T15 Renderer Projection | [x] DONE | renderer admission tests |
+| T16 Model C | [x] DONE | renderer structure tests |
+| T17 Report Finalization | [x] DONE | finalization/conflict tests |
+| T18 Pipeline | [x] DONE | pipeline tests |
+| T19 Parent Integration | [x] DONE | graph/V1 isolation tests |
+| T20 Faithfulness Eval | [x] DONE | deterministic evaluator tests |
+| T21 Integration / Regression | [x] DONE | 190-test deterministic regression |
+| T22 Provider Smoke | [x] DONE | Smoke Outcome PASS |
+| T23 Closeout | [x] DONE | execution ledger and retro |
 
 Required before P2-S5 implementation closeout：
 
@@ -2194,22 +2194,25 @@ Final result record：
 
 ```text
 P2-S5 focused pytest:
-PASS / FAIL
+PASS — 150 passed, 1 provider-smoke test skipped by default, 26 warnings
 
 Full regression:
-PASS / FAIL / PREEXISTING_BASELINE_ONLY
+PASS — 190 passed, 1 provider-smoke test skipped by default,
+1 legacy live-provider test deselected, 48 warnings
 
 Ruff:
-PASS / FAIL
+NO_NEW_S5_VIOLATIONS — touched/new target PASS;
+canonical target retains 12 pre-existing violations in untouched evaluation scripts
 
 Mypy:
-PASS / FAIL / NO_NEW_S5_ERRORS_WITH_BASELINE_RECORDED
+NO_NEW_S5_ERRORS_WITH_BASELINE_RECORDED — 14 new/touched production modules PASS;
+9 pre-existing errors remain in src/open_deep_research/utils.py
 
 git diff --check:
-PASS / FAIL
+PASS
 
 Real-provider smoke:
-PASS / FAIL / SKIPPED_DUE_TO_ENVIRONMENT
+PASS
 ```
 
 ---
@@ -2219,21 +2222,21 @@ PASS / FAIL / SKIPPED_DUE_TO_ENVIRONMENT
 Answer all with YES：
 
 ```text
-[ ] YES — No Contract semantics changed during coding.
-[ ] YES — No SPEC semantics changed during coding.
-[ ] YES — No architecture decision was silently made in TASKS/code.
-[ ] YES — Global Synthesis remains deterministic staged orchestration.
-[ ] YES — No Agentic synthesis loop was introduced.
-[ ] YES — Research Run input remains stable while ACTIVE.
-[ ] YES — No second provenance representation was introduced.
-[ ] YES — No second Citation authority was introduced.
-[ ] YES — Renderer remains non-authoritative.
-[ ] YES — Evaluator remains graph-external.
-[ ] YES — Manifest remains atomic.
-[ ] YES — Retry remains Host-owned and bounded.
-[ ] YES — Source metadata enrichment remains compact/best-effort.
-[ ] YES — V1 remains available during P2-S5.
-[ ] YES — No new EvidenceFlow S5 mypy errors were introduced.
+[x] YES — No Contract semantics changed during coding.
+[x] YES — No SPEC semantics changed during coding.
+[x] YES — No architecture decision was silently made in TASKS/code.
+[x] YES — Global Synthesis remains deterministic staged orchestration.
+[x] YES — No Agentic synthesis loop was introduced.
+[x] YES — Research Run input remains stable while ACTIVE.
+[x] YES — No second provenance representation was introduced.
+[x] YES — No second Citation authority was introduced.
+[x] YES — Renderer remains non-authoritative.
+[x] YES — Evaluator remains graph-external.
+[x] YES — Manifest remains atomic.
+[x] YES — Retry remains Host-owned and bounded.
+[x] YES — Source metadata enrichment remains compact/best-effort.
+[x] YES — V1 remains available during P2-S5.
+[x] YES — No new EvidenceFlow S5 mypy errors were introduced.
 ```
 
 Any `NO`：
@@ -2274,14 +2277,14 @@ no authority/document drift
 Implementation Verification：
 
 ```text
-[ ] PASS
+[x] PASS
 [ ] BLOCKED
 ```
 
 Real-provider Smoke：
 
 ```text
-[ ] PASS
+[x] PASS
 [ ] SKIPPED_DUE_TO_ENVIRONMENT
 [ ] FAIL
 ```
@@ -2289,9 +2292,11 @@ Real-provider Smoke：
 Known non-blocking limitations：
 
 ```text
--
--
--
+- external evaluator live entry returned operational `NotFoundError` because the
+  configured endpoint does not expose the frozen default `gpt-4.1`; deterministic
+  evaluator tests pass
+- canonical Ruff retains 12 pre-existing findings in untouched evaluation scripts
+- full/scoped mypy retains the accepted 9 pre-existing utils.py errors
 ```
 
 ---
@@ -2361,46 +2366,46 @@ Branch:
 p2-s5-claim-citation-grounding
 
 Implementation commit(s):
-
+not created — implementation remains an uncommitted working-tree diff
 
 T00–T23:
-DONE / BLOCKED
+DONE
 
 S5-R01–R19:
-__/19 PASS
+19/19 PASS
 
 Focused tests:
-
+150 passed, 1 skipped, 26 warnings
 
 Full regression:
-
+190 passed, 1 skipped, 1 deselected, 48 warnings
 
 Ruff:
-
+new/touched S5 target PASS; 12 pre-existing canonical-target findings recorded
 
 Mypy:
-
+NO_NEW_S5_ERRORS; 9 pre-existing utils.py errors recorded
 
 git diff --check:
-
+PASS
 
 Real-provider smoke:
-PASS / SKIPPED_DUE_TO_ENVIRONMENT / FAIL
+PASS
 
 External evaluator:
-IMPLEMENTED / VERIFIED / BLOCKED
+IMPLEMENTED / DETERMINISTICALLY VERIFIED / LIVE OPERATIONAL_FAILURE: NotFoundError
 
 Contract drift:
-NONE / DETAILS
+NONE
 
 SPEC drift:
-NONE / DETAILS
+NONE
 
 Known limitations:
-
+evaluator default model unavailable at configured endpoint; accepted Ruff/mypy baselines remain
 
 Final implementation status:
-VERIFIED / BLOCKED
+VERIFIED
 ```
 
 只有：

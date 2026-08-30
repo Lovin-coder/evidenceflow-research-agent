@@ -250,7 +250,7 @@ T19 + T20       → T21 → T22 → T23
 
 ### T00 — Implementation Preflight and Source Mapping
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** none
 
@@ -298,7 +298,7 @@ current code contradicts frozen Contract boundary
 
 ### T01 — Implement P2-S5 Stable Domain Contracts
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T00`
 
@@ -370,7 +370,7 @@ Stable contract code 与 Contracts v1 逐项一致且 focused tests 通过。
 
 ### T02 — Parent Process State and Reducer Semantics
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T00`
 
@@ -454,7 +454,7 @@ State contract 能够支持 P01、P05、P10，而没有扩大 Domain module 职�
 
 ### T03 — Research Run Lifecycle and Entry Identity
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T02`
 
@@ -617,7 +617,7 @@ P01 state machine 在 checkpoint-backed tests 中具有 deterministic 行为。
 
 ### T04 — Internal DTOs, Receipts, Limits and Execution Types
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T00`
 
@@ -782,7 +782,7 @@ limit+1
 
 ### T05 — Compact Search-provider Metadata Enrichment
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T00`
 
@@ -903,7 +903,7 @@ Required adapter 已实现并经 focused tests 验证；optional provider fields
 
 ### T06 — Task-qualified Resolver and Bounded Projection Foundation
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T01`, `T04`, `T05`
 
@@ -1014,7 +1014,7 @@ skip Model A
 
 ### T07 — Model A Claim Generation and Materialization
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T01`, `T04`, `T06`
 
@@ -1151,7 +1151,7 @@ HIGH
 
 ### T08 — Finding-derived Evidence Universe and Judge Projection
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T06`, `T07`
 
@@ -1252,7 +1252,7 @@ skip Model B
 
 ### T09 — Model B Execution, Retry, Concurrency and Sibling Isolation
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T04`, `T08`
 
@@ -1353,7 +1353,7 @@ isolation 或 canonical output ordering。Lower-level nested request retry 必�
 
 ### T10 — Grounding Validation, Five-state Materialization and Receipts
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T09`
 
@@ -1432,7 +1432,7 @@ INSUFFICIENT
 
 ### T11 — Citation Materialization and Deterministic Identity
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T10`
 
@@ -1495,7 +1495,7 @@ Citation EvidenceRef 必须可解析。任何 required Citation materialization 
 
 ### T12 — Manifest Publication Gate, Replay and Derived Metrics
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T02`, `T07`, `T10`, `T11`
 
@@ -1592,7 +1592,7 @@ Manifest + report=None + PARTIAL
 
 ### T13 — Issue Factory, Conflict Reconciliation and Global Status
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T02`, `T04`
 
@@ -1682,7 +1682,7 @@ Valid `INSUFFICIENT/CONTRADICTED` 不自动 degradation。
 
 ### T14 — Reader-facing Source Display Projection
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T05`, `T11`
 
@@ -1781,7 +1781,7 @@ Canonical Citation traversal 中 first key occurrence 依次分配 `[1]`, `[2]`,
 
 ### T15 — Renderer Claim/Evidence Projection and Context Admission
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T10`, `T14`
 
@@ -1877,7 +1877,7 @@ Context 无法容纳 Evidence 时：
 
 ### T16 — Model C Structured Renderer and Aggregate Validation
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T04`, `T15`
 
@@ -1979,7 +1979,7 @@ PARTIAL
 
 ### T17 — Deterministic Report Finalization, Conflict Marker and Citation Injection
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T14`, `T16`
 
@@ -2071,7 +2071,7 @@ Manifest、regenerate Claims、re-ground 或 reduce Citation set to fit output�
 
 ### T18 — Global Synthesis Pipeline Orchestration
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T07`, `T09`, `T10`, `T12`, `T13`, `T14`, `T15`, `T16`, `T17`
 
@@ -2147,7 +2147,7 @@ Gate 通过后计算。
 
 ### T19 — Parent Graph Integration, V1 Fallback and Run Finalization
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T03`, `T18`
 
@@ -2222,7 +2222,7 @@ V2 failure 不得：
 
 ### T20 — Minimal External LLM-as-a-Judge Faithfulness Evaluator
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T12`, `T14`, `T17`
 
@@ -2372,7 +2372,7 @@ Eval 结果：
 
 ### T21 — Deterministic Integration, Regression and Failure Injection
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T19`, `T20`
 
@@ -2451,7 +2451,9 @@ S5 deterministic correctness 不依赖真实 network/model provider。
 
 ### T22 — Controlled Real-provider Smoke
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
+
+**Smoke Outcome:** `PASS`
 
 **Depends on:** `T21`
 
@@ -2541,7 +2543,7 @@ Environment unavailable：
 
 ### T23 — Implementation Documentation and Phase Closeout
 
-**Status:** `NOT_STARTED`
+**Status:** `DONE`
 
 **Depends on:** `T22` Task Status = `DONE`（`T22` 已依赖 `T21`），且 T22 Smoke Outcome 必须属于：
 
@@ -2730,3 +2732,76 @@ P2-S5 CHECKLIST
 Coding
 → STILL BLOCKED UNTIL CHECKLIST + PRE-IMPLEMENTATION REVIEW COMPLETE
 ```
+
+---
+
+## 8. Implementation Execution Evidence
+
+Execution completed on 2026-08-29 from verification base
+`dc43cd83b4f2c6716c82cd791d0ad28fe9e0d51a` on branch
+`p2-s5-claim-citation-grounding`. T00–T23 are `DONE`; S5-R01–R19 are
+`19/19 PASS`.
+
+Implementation footprint:
+
+- stable contracts, Parent State/reducers, lifecycle admission, metadata adapter,
+  configuration, prompts, graph integration, and V1 fallback were updated in the
+  existing project-owned modules;
+- the semantic subsystem was added under
+  `src/open_deep_research/global_synthesis/`;
+- deterministic contract, lifecycle, Claim, Grounding, publication, display,
+  renderer, pipeline, graph-integration, and evaluator tests were added under
+  `tests/`;
+- an opt-in, environment-gated real-provider smoke entry was added at
+  `tests/test_p2_s5_provider_smoke.py`.
+
+Verification evidence:
+
+```text
+P2-S5 focused and directly affected tests:
+150 passed, 1 skipped, 26 warnings
+
+Full deterministic regression:
+190 passed, 1 skipped, 1 deselected, 48 warnings
+
+Ruff canonical target:
+12 pre-existing violations in untouched evaluation scripts
+
+Ruff new/touched S5 target:
+PASS — no violations
+
+Mypy full/scoped target:
+9 pre-existing errors, all in src/open_deep_research/utils.py
+PASS — no new errors in the other 14 touched/new production modules
+
+git diff --check:
+PASS
+```
+
+Controlled provider smoke:
+
+```text
+Task Status = DONE
+Smoke Outcome = PASS
+Model A requests/retries = 1 / 0
+Model B requests/retries = 2 / 0
+Model C requests/retries = 1 / 0
+Claim count = 2
+Grounding = SUPPORTED: 2; all other statuses: 0
+Citation count = 2
+Manifest Gate = PASS
+Renderer = MODEL_C_PASS
+GlobalSynthesisStatus = SUCCESS
+Issues = none
+External evaluator = OPERATIONAL_FAILURE: NotFoundError
+Reason = the configured endpoint does not expose the frozen default gpt-4.1 model
+```
+
+The first sandboxed smoke attempt stopped before any provider request because the
+injected SOCKS proxy required an unavailable optional `socksio` package. The same
+frozen smoke was then executed through the allowed unrestricted network path with
+proxy variables removed and passed. This environmental pre-request failure is not
+the recorded runtime smoke outcome.
+
+Contract drift: none. SPEC drift: none. Architecture drift: none. No dependencies or
+lockfiles were changed, and no commit was created by implementation execution.

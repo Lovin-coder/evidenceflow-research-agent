@@ -15,6 +15,8 @@ from typing_extensions import TypedDict
 from open_deep_research.domain_models import (
     EvidenceNeed,
     EvidenceRecord,
+    EvidenceRef,
+    GroundingManifest,
     MedicalResearchBrief,
     MedicalResearchTask,
     ResearchFinding,
@@ -27,6 +29,9 @@ IdentityModel = TypeVar("IdentityModel")
 MAX_RESEARCH_EXECUTION_ISSUES = 100
 MAX_RESEARCH_EXECUTION_ISSUE_MESSAGE_CHARS = 512
 MAX_RESEARCH_EXECUTION_ISSUES_SERIALIZED_CHARS = 192_000
+MAX_GLOBAL_SYNTHESIS_ISSUES = 64
+MAX_GLOBAL_SYNTHESIS_ISSUE_MESSAGE_CHARS = 1_000
+MAX_GLOBAL_SYNTHESIS_ISSUES_SERIALIZED_CHARS = 128_000
 
 
 ###################
@@ -119,6 +124,53 @@ class ResearchExecutionIssue(BaseModel):
     source_id: str | None = Field(default=None, max_length=256)
     candidate_id: str | None = Field(default=None, max_length=256)
     degrades_task_status: bool
+
+
+class GlobalSynthesisStatus(str, Enum):
+    """Describe the publication outcome of the Global Synthesis pipeline."""
+
+    SUCCESS = "success"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class GlobalSynthesisSeverity(str, Enum):
+    """Classify a Global Synthesis issue without deriving status from severity."""
+
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class GlobalSynthesisIssue(BaseModel):
+    """Carry a bounded, Host-owned Global Synthesis diagnostic.
+
+    ``stage`` intentionally remains an open string so stable State consumers do
+    not depend on the phase-local vocabulary used by the current Host.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+    issue_id: str = Field(min_length=1, max_length=96)
+    stage: str = Field(min_length=1, max_length=96)
+    code: str = Field(min_length=1, max_length=96)
+    severity: GlobalSynthesisSeverity
+    message: str = Field(
+        min_length=1,
+        max_length=MAX_GLOBAL_SYNTHESIS_ISSUE_MESSAGE_CHARS,
+    )
+    claim_id: str | None = Field(default=None, max_length=256)
+    task_id: str | None = Field(default=None, max_length=256)
+    evidence_ref: EvidenceRef | None = None
+    attempt: int | None = None
+    degrades_global_status: bool
+
+
+class ResearchRunStatus(str, Enum):
+    """Track the lifecycle of the one authoritative Research Run in State."""
+
+    ACTIVE = "active"
+    AWAITING_CLARIFICATION = "awaiting_clarification"
+    FINALIZED = "finalized"
 
 
 def make_research_execution_issue(
@@ -277,6 +329,62 @@ def execution_issues_reducer(
     return merged
 
 
+def grounding_manifest_reducer(
+    current_value: GroundingManifest | None,
+    new_value: GroundingManifest | None,
+) -> GroundingManifest | None:
+    """Publish one atomic Manifest and make its exact replay idempotent.
+
+    A new Research Run must clear this channel with LangGraph ``Overwrite``;
+    ordinary reducer updates cannot retract or replace a published Manifest.
+    """
+    if current_value is None:
+        return new_value
+    if new_value == current_value:
+        return current_value
+    raise ValueError("Grounding Manifest replay has a divergent payload")
+
+
+def measure_global_synthesis_issues_chars(
+    issues: list[GlobalSynthesisIssue],
+) -> int:
+    """Measure the deterministic JSON projection used by the issue-ledger bound."""
+    return len(
+        json.dumps(
+            [issue.model_dump(mode="json") for issue in issues],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def global_synthesis_issues_reducer(
+    current_value: list[GlobalSynthesisIssue],
+    new_value: list[GlobalSynthesisIssue],
+) -> list[GlobalSynthesisIssue]:
+    """Append bounded issues, deduplicate IDs, and defensively retain first writes.
+
+    Divergent semantic reconciliation and sticky degradation are deliberately
+    owned by the T13 Host collector, not this State reducer.
+    """
+    merged = list(current_value)
+    known_ids = {issue.issue_id for issue in merged}
+    for issue in new_value:
+        if issue.issue_id in known_ids:
+            continue
+        known_ids.add(issue.issue_id)
+        merged.append(issue)
+    if len(merged) > MAX_GLOBAL_SYNTHESIS_ISSUES:
+        raise ValueError("Global Synthesis issue count exceeds the state bound")
+    if (
+        measure_global_synthesis_issues_chars(merged)
+        > MAX_GLOBAL_SYNTHESIS_ISSUES_SERIALIZED_CHARS
+    ):
+        raise ValueError("Global Synthesis issue payload exceeds the state bound")
+    return merged
+
+
 def admit_research_execution_issues(
     current_value: list[ResearchExecutionIssue],
     new_value: list[ResearchExecutionIssue],
@@ -334,6 +442,16 @@ class AgentState(MessagesState):
     research_results: Annotated[list[ResearchTaskResult], research_results_reducer]
     raw_notes: Annotated[list[str], override_reducer]
     notes: Annotated[list[str], override_reducer]
+    grounding_manifest: Annotated[
+        GroundingManifest | None, grounding_manifest_reducer
+    ]
+    global_synthesis_status: GlobalSynthesisStatus | None
+    global_synthesis_issues: Annotated[
+        list[GlobalSynthesisIssue], global_synthesis_issues_reducer
+    ]
+    v2_shadow_report: str | None
+    research_run_status: ResearchRunStatus | None
+    research_run_input_cursor: int | None
     final_report: str
 
 class SupervisorState(TypedDict):
