@@ -263,3 +263,218 @@ Derived Presentation View
 ```
 
 这比把 Source identity 升级为跨 Task/global identity 更小、更清晰，也保持 Evidence-level auditability。
+
+# ClaimDraftBatch Provider Schema 与 Runtime Salvage 边界分析
+
+## 背景
+
+EvidenceFlow 的 Global Synthesis 阶段中：
+
+- ClaimDraft 表示 Model A 生成的 Claim proposal；
+- ClaimRecord 表示经过 Host validation、identity assignment 和 provenance binding 后的 canonical record。
+
+当前链路：
+
+Model A
+→ ClaimDraftBatch
+→ ClaimDraft validation
+→ ClaimRecord materialization
+
+其中：
+
+ClaimDraft 不代表可信最终对象，而是模型生成后的中间 proposal。
+
+Host 仍然拥有最终 validation ownership。
+
+## 当前设计中的 ClaimDraftBatch 取舍
+
+当前 ClaimDraftBatch 使用 raw sibling container：
+
+claims: list[object]
+
+该设计不是临时绕过，也不是类型缺失，而是为了满足 EvidenceFlow 的 reliability 目标：
+
+- sibling-level validation；
+- invalid sibling isolation；
+- partial salvage；
+- 避免单个错误 Claim 导致整个 batch failure。
+
+如果直接使用：
+
+claims: list[ClaimDraft]
+
+Pydantic nested validation 会表现为 batch atomic validation：
+
+- 任意 sibling 不满足 ClaimDraft contract；
+- 整个 ClaimDraftBatch 构造失败；
+- 其他合法 sibling 无法继续 materialize。
+
+因此：
+
+list[object]
+
+体现的是：
+
+Runtime salvage boundary。
+
+它保证 Host 可以逐 sibling 判断：
+
+valid sibling:
+→ ClaimDraft
+→ ClaimRecord
+
+invalid sibling:
+→ diagnostic issue
+
+而不是整个 batch 失败。
+
+## 当前暴露的问题
+
+该设计同时带来了 Provider-facing schema 弱化问题。
+
+由于：
+
+claims: list[object]
+
+structured output schema 无法向模型明确暴露 ClaimDraft 字段。
+
+Provider 看到：
+
+claims:
+  array
+    items: {}
+
+而不是：
+
+claims:
+  array
+    items:
+      text
+      materiality
+      finding_refs
+      qualifiers
+
+因此：
+
+- Model A 缺少明确 wire contract；
+- 可能生成语义正确但字段不符合 Host contract 的 JSON；
+- Host validation 可以发现问题，但无法提前约束模型输出。
+
+该问题属于：
+
+Provider-facing schema 与 Runtime validation ownership 的边界问题。
+
+不是：
+
+- ClaimDraft domain contract 错误；
+- ClaimRecord 设计错误；
+- Grounding 设计错误；
+- Manifest / Publication 设计错误。
+
+## Considered Solutions
+
+### Solution 1: list[ClaimDraft]
+
+优势：
+
+- Provider schema 完整；
+- Structured Output 约束增强；
+- 模型输出格式更加稳定。
+
+问题：
+
+- 重新引入 batch atomic validation；
+- invalid sibling 会导致整个 batch rejection；
+- 与 EvidenceFlow 当前 sibling salvage 设计冲突。
+
+当前不采用。
+
+### Solution 2: list[ClaimDraft | object]
+
+优势：
+
+表面上同时包含 ClaimDraft schema 和 raw object 能力。
+
+问题：
+
+联合 schema 会退化为宽松 object 分支：
+
+- Provider 约束不可靠；
+- 合法 sibling 也不会稳定获得 ClaimDraft runtime 类型；
+- 仍需要 Host 二次 validation。
+
+当前不推荐。
+
+### Solution 3: SkipValidation[SerializeAsAny[ClaimDraft]]
+
+目标：
+
+同时满足：
+
+- Provider schema 暴露 ClaimDraft；
+- runtime 保留 raw sibling；
+- Host 继续拥有 validation ownership。
+
+该方向属于：
+
+minimal invasive fix。
+
+实施前需要验证：
+
+- generated JSON schema；
+- Structured Output provider compatibility；
+- runtime object behavior；
+- serializer behavior。
+
+### Solution 4: Custom Admission Layer（未来升级方向）
+
+未来更彻底的架构方向：
+
+LLM JSON output
+
+↓
+
+Custom Admission Layer
+
+↓
+
+ClaimDraft validation
+
+↓
+
+ClaimRecord materialization
+
+该方案进一步解耦：
+
+- Provider-facing generation schema；
+- Runtime admission；
+- Domain contract。
+
+优势：
+
+- 明确 LLM output 是 untrusted artifact；
+- 支持更细粒度 failure isolation；
+- 更符合复杂 Agent production system 的可靠性设计。
+
+但当前阶段不实施。
+
+原因：
+
+- S5 frozen semantics 已满足；
+- 当前问题属于 schema boundary 优化；
+- 引入 custom admission 会扩大修改范围。
+
+## Current Decision
+
+当前保持：
+
+ClaimDraft
+→ ClaimRecord
+
+领域边界不变。
+
+保持：
+
+ClaimDraftBatch sibling salvage 设计。
+
+Custom Admission Layer 记录为未来 architecture upgrade option，而不是当前 S5 implementation requirement。
