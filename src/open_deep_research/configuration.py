@@ -126,6 +126,13 @@ class Configuration(BaseModel):
         }
     )
     # Model Configuration
+    model_enable_thinking: bool | None = Field(
+        default=None,
+        description=(
+            "Optional global provider Thinking policy; None preserves provider-default "
+            "behavior unless a model role overrides it."
+        ),
+    )
     summarization_model: str = Field(
         default="openai:gpt-4.1-mini",
         metadata={
@@ -145,6 +152,13 @@ class Configuration(BaseModel):
                 "description": "Maximum output tokens for summarization model"
             }
         }
+    )
+    summarization_model_enable_thinking: bool | None = Field(
+        default=None,
+        description=(
+            "Optional provider Thinking override for the summarization model; None "
+            "inherits the global model policy."
+        ),
     )
     max_content_length: int = Field(
         default=50000,
@@ -223,7 +237,7 @@ class Configuration(BaseModel):
         default=None,
         description=(
             "Optional provider Thinking override for the research model; None "
-            "preserves provider-default behavior."
+            "inherits the global model policy."
         ),
     )
     research_model_max_tokens: int = Field(
@@ -256,6 +270,13 @@ class Configuration(BaseModel):
             }
         }
     )
+    compression_model_enable_thinking: bool | None = Field(
+        default=None,
+        description=(
+            "Optional provider Thinking override for the compression model; None "
+            "inherits the global model policy."
+        ),
+    )
     final_report_model: str = Field(
         default="openai:gpt-4.1",
         metadata={
@@ -275,6 +296,13 @@ class Configuration(BaseModel):
                 "description": "Maximum output tokens for final report model"
             }
         }
+    )
+    final_report_model_enable_thinking: bool | None = Field(
+        default=None,
+        description=(
+            "Optional provider Thinking override for the final-report model; None "
+            "inherits the global model policy."
+        ),
     )
     # MCP server configuration
     mcp_config: Optional[MCPConfig] = Field(

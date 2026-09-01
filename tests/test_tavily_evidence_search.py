@@ -29,6 +29,16 @@ class SelectingModel:
         )
 
 
+class ConfiguredSelectingModel(SelectingModel):
+    """Expose the production construction chain for runtime-policy assertions."""
+
+    def with_structured_output(self, _schema):
+        return self
+
+    def with_retry(self, **_kwargs):
+        return self
+
+
 class SelectiveFailingModel(SelectingModel):
     """Fail one Source selection while allowing a sibling Source to succeed."""
 
@@ -78,6 +88,40 @@ def provider_response() -> dict:
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_summarization_model_uses_role_thinking_policy(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Apply the summarization override at its direct construction boundary."""
+    monkeypatch.delenv("MODEL_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("SUMMARIZATION_MODEL_ENABLE_THINKING", raising=False)
+    captured: dict[str, object] = {}
+
+    def fake_init_chat_model(**kwargs):
+        captured.update(kwargs)
+        return ConfiguredSelectingModel()
+
+    monkeypatch.setattr(search_runtime, "init_chat_model", fake_init_chat_model)
+    await execute_tavily_search_structured(
+        ["treatment effectiveness"],
+        config={
+            "configurable": {
+                "model_enable_thinking": False,
+                "summarization_model_enable_thinking": True,
+                "summarization_model": "openai:test-summary",
+                "summarization_model_max_tokens": 654,
+            }
+        },
+        provider_responses=[provider_response()],
+        artifact_store=LocalFileArtifactStore(tmp_path, "summary-policy-run"),
+    )
+
+    assert captured["model"] == "openai:test-summary"
+    assert captured["max_tokens"] == 654
+    assert captured["extra_body"] == {"enable_thinking": True}
 
 
 @pytest.mark.asyncio

@@ -50,6 +50,7 @@ class CompressionModel:
         self.evidence_id = evidence_id
         self.structured_schema = None
         self.messages = []
+        self.bound_configs = []
 
     def with_structured_output(self, schema):
         self.structured_schema = schema
@@ -58,7 +59,8 @@ class CompressionModel:
     def with_retry(self, **_kwargs):
         return self
 
-    def with_config(self, _config):
+    def with_config(self, config):
+        self.bound_configs.append(config)
         return self
 
     async def ainvoke(self, messages):
@@ -337,6 +339,8 @@ async def test_deterministic_complete_s4_path_crosses_both_agent_boundaries(
             "search_api": "tavily",
             "max_search_tool_message_chars": 8_000,
             "max_supervisor_result_projection_chars": 4_000,
+            "model_enable_thinking": False,
+            "compression_model_enable_thinking": True,
         }
     }
     store = LocalFileArtifactStore(tmp_path, "integration-run")
@@ -419,6 +423,9 @@ async def test_deterministic_complete_s4_path_crosses_both_agent_boundaries(
     )
 
     assert compression_model.structured_schema is runtime.ResearchCompression
+    assert compression_model.bound_configs[-1]["configurable"]["extra_body"] == {
+        "enable_thinking": True
+    }
     compression_context = "\n".join(str(message.content) for message in compression_model.messages)
     assert search_result.evidences[0].evidence_id in compression_context
     assert search_result.evidences[0].excerpt in compression_context

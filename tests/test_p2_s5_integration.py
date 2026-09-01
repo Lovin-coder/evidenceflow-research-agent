@@ -90,8 +90,10 @@ async def test_unexpected_v2_failure_is_contained_and_v1_inputs_survive(
 class _WriterModel:
     def __init__(self, *, error=None) -> None:
         self.error = error
+        self.bound_configs = []
 
-    def with_config(self, _config):
+    def with_config(self, config):
+        self.bound_configs.append(config)
         return self
 
     async def ainvoke(self, _request):
@@ -103,15 +105,24 @@ class _WriterModel:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [None, RuntimeError("provider failed")])
 async def test_controlled_v1_terminal_paths_finalize_run(monkeypatch, error) -> None:
-    monkeypatch.setattr(runtime, "configurable_model", _WriterModel(error=error))
+    writer_model = _WriterModel(error=error)
+    monkeypatch.setattr(runtime, "configurable_model", writer_model)
     output = await runtime.final_report_generation(
         {
             "messages": [HumanMessage(content="question")],
             "research_brief": "brief",
             "notes": ["legacy note"],
         },
-        {},
+        {
+            "configurable": {
+                "model_enable_thinking": True,
+                "final_report_model_enable_thinking": False,
+            }
+        },
     )
 
     assert output["research_run_status"] is ResearchRunStatus.FINALIZED
     assert isinstance(output["final_report"], str)
+    assert writer_model.bound_configs[-1]["configurable"]["extra_body"] == {
+        "enable_thinking": False
+    }

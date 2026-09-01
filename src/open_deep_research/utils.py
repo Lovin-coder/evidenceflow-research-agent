@@ -48,6 +48,10 @@ from open_deep_research.evidence_ingestion import (
     sanitize_candidate_selection,
     select_webpage_chunks,
 )
+from open_deep_research.model_runtime import (
+    build_model_runtime_fields,
+    resolve_model_enable_thinking,
+)
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import (
     ResearchComplete,
@@ -168,12 +172,19 @@ async def execute_tavily_search_structured(
     store = artifact_store or artifact_store_from_config(config, artifact_run_id)
     if selection_model is None:
         model_api_key = get_api_key_for_model(configurable.summarization_model, config)
+        model_fields = build_model_runtime_fields(
+            model=configurable.summarization_model,
+            max_tokens=configurable.summarization_model_max_tokens,
+            api_key=model_api_key,
+            enable_thinking=resolve_model_enable_thinking(
+                configurable.model_enable_thinking,
+                configurable.summarization_model_enable_thinking,
+            ),
+        )
         selection_model = (
             init_chat_model(
-                model=configurable.summarization_model,
-                max_tokens=configurable.summarization_model_max_tokens,
-                api_key=model_api_key,
                 tags=["langsmith:nostream"],
+                **model_fields,
             )
             .with_structured_output(WebpageSelection)
             .with_retry(stop_after_attempt=configurable.max_structured_output_retries)

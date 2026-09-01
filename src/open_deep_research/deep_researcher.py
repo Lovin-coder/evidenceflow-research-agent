@@ -53,6 +53,10 @@ from open_deep_research.evidence_ingestion import (
 )
 from open_deep_research.global_synthesis import run_global_synthesis
 from open_deep_research.global_synthesis.pipeline import _contained_pipeline_failure
+from open_deep_research.model_runtime import (
+    build_configurable_model_runtime_config,
+    resolve_model_enable_thinking,
+)
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
@@ -238,41 +242,6 @@ def _bootstrap_or_resume_research_run(
         )
 
     raise _ResearchRunLifecycleConflict("Unknown Research Run lifecycle status")
-
-
-def _research_model_runtime_config(
-    configurable: Configuration,
-    config: RunnableConfig,
-) -> RunnableConfig:
-    """Build the narrow internal model config for the research-model boundary.
-
-    The explicit configurable mapping prevents arbitrary caller-supplied provider
-    kwargs from entering the configurable model. Only the typed Thinking policy is
-    translated to ``extra_body``; ``None`` deliberately omits that field.
-
-    Args:
-        configurable: Validated production configuration.
-        config: Runtime configuration used only to resolve the existing model API key.
-
-    Returns:
-        RunnableConfig preserving model/max_tokens/api_key behavior and carrying an
-        optional derived provider Thinking override.
-    """
-    model_fields: dict[str, Any] = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-    }
-    api_key = get_api_key_for_model(configurable.research_model, config)
-    if api_key is not None:
-        model_fields["api_key"] = api_key
-    if configurable.research_model_enable_thinking is not None:
-        model_fields["extra_body"] = {
-            "enable_thinking": configurable.research_model_enable_thinking
-        }
-    return {
-        "configurable": model_fields,
-        "tags": ["langsmith:nostream"],
-    }
 
 
 def _render_evidence_need(evidence_need: EvidenceNeed) -> list[str]:
@@ -821,7 +790,15 @@ async def clarify_with_user(
     
     # Step 2: Prepare the model for structured clarification analysis
     messages = state["messages"]
-    model_config = _research_model_runtime_config(configurable, config)
+    model_config = build_configurable_model_runtime_config(
+        model=configurable.research_model,
+        max_tokens=configurable.research_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.research_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.research_model_enable_thinking,
+        ),
+    )
     
     # Configure model with structured output and retry logic
     clarification_model = (
@@ -878,7 +855,15 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     """
     # Step 1: Set up the research model for structured output
     configurable = Configuration.from_runnable_config(config)
-    research_model_config = _research_model_runtime_config(configurable, config)
+    research_model_config = build_configurable_model_runtime_config(
+        model=configurable.research_model,
+        max_tokens=configurable.research_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.research_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.research_model_enable_thinking,
+        ),
+    )
     
     # Configure model for structured medical research brief generation
     research_model = (
@@ -944,7 +929,15 @@ async def supervisor(
     artifact_run_id = _artifact_run_id_for_node(
         state.get("artifact_run_id"), config, runtime
     )
-    research_model_config = _research_model_runtime_config(configurable, config)
+    research_model_config = build_configurable_model_runtime_config(
+        model=configurable.research_model,
+        max_tokens=configurable.research_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.research_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.research_model_enable_thinking,
+        ),
+    )
     
     # Available tools: research delegation, completion signaling, and strategic thinking
     lead_researcher_tools = [ConductResearch, ResearchComplete, think_tool]
@@ -1184,7 +1177,15 @@ async def researcher(
         )
     
     # Step 2: Configure the researcher model with tools
-    research_model_config = _research_model_runtime_config(configurable, config)
+    research_model_config = build_configurable_model_runtime_config(
+        model=configurable.research_model,
+        max_tokens=configurable.research_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.research_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.research_model_enable_thinking,
+        ),
+    )
     
     # Prepare system prompt with MCP context if available
     researcher_prompt = research_system_prompt.format(
@@ -1733,22 +1734,19 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
         error=None,
     )
 
-    compression_model_fields: dict[str, Any] = {
-        "model": configurable.compression_model,
-        "max_tokens": configurable.compression_model_max_tokens,
-    }
-    compression_api_key = get_api_key_for_model(configurable.compression_model, config)
-    if compression_api_key is not None:
-        compression_model_fields["api_key"] = compression_api_key
+    compression_model_config = build_configurable_model_runtime_config(
+        model=configurable.compression_model,
+        max_tokens=configurable.compression_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.compression_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.compression_model_enable_thinking,
+        ),
+    )
     synthesizer_model = (
         configurable_model.with_structured_output(ResearchCompression)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(
-            {
-                "configurable": compression_model_fields,
-                "tags": ["langsmith:nostream"],
-            }
-        )
+        .with_config(compression_model_config)
     )
 
     researcher_messages = list(state.get("researcher_messages", []))
@@ -1899,12 +1897,15 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
     
     # Step 2: Configure the final report generation model
     configurable = Configuration.from_runnable_config(config)
-    writer_model_config = {
-        "model": configurable.final_report_model,
-        "max_tokens": configurable.final_report_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.final_report_model, config),
-        "tags": ["langsmith:nostream"]
-    }
+    writer_model_config = build_configurable_model_runtime_config(
+        model=configurable.final_report_model,
+        max_tokens=configurable.final_report_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.final_report_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.final_report_model_enable_thinking,
+        ),
+    )
     
     # Step 3: Attempt report generation with token limit retry logic
     max_retries = 3
