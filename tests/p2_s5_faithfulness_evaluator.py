@@ -21,6 +21,7 @@ from open_deep_research.global_synthesis.types import (
     _invoke_with_host_retry,
     _StructuredValidationError,
 )
+from open_deep_research.model_runtime import build_model_runtime_fields
 
 _EVALUATOR_TIMEOUT_SECONDS = 90.0
 _MAX_EVALUATOR_INPUT_CHARS = 256_000
@@ -160,10 +161,22 @@ async def evaluate_faithfulness_live(
     evaluator_input: FaithfulnessEvaluatorInput,
     *,
     model_name: str = "gpt-4.1",
+    enable_thinking: bool | None = None,
     max_retries: int = 3,
 ) -> FaithfulnessEvaluation:
     """Callable opt-in live smoke path; deterministic tests never invoke it."""
-    model = ChatOpenAI(model=model_name, max_retries=0)
+    chat_openai_model_name = (
+        model_name.removeprefix("openai:")
+        if model_name.startswith("openai:")
+        else model_name
+    )
+    model_fields = build_model_runtime_fields(
+        model=chat_openai_model_name,
+        max_tokens=None,
+        api_key=None,
+        enable_thinking=enable_thinking,
+    )
+    model = ChatOpenAI(max_retries=0, **model_fields)
     structured = model.with_structured_output(FaithfulnessEvaluation)
     return await evaluate_faithfulness(
         structured.ainvoke,
