@@ -7,7 +7,9 @@ import re
 import pytest
 from test_p2_s5_projection import _brief, _result
 
+import open_deep_research.global_synthesis.pipeline as pipeline_runtime
 from open_deep_research.artifact_store import LocalFileArtifactStore
+from open_deep_research.configuration import Configuration
 from open_deep_research.domain_models import (
     ClaimMateriality,
     EvidenceRef,
@@ -15,6 +17,7 @@ from open_deep_research.domain_models import (
     GroundingManifest,
 )
 from open_deep_research.global_synthesis.pipeline import (
+    _configured_synthesis_models,
     _SynthesisModels,
     run_global_synthesis,
 )
@@ -27,6 +30,7 @@ from open_deep_research.global_synthesis.types import (
     ReportSectionDraft,
     ShadowReportDraft,
 )
+from open_deep_research.prompts import CLAIM_GENERATION_PROMPT
 from open_deep_research.state import GlobalSynthesisStatus
 
 
@@ -109,6 +113,92 @@ def _raw_claim(text: str, *, materiality: str = "high") -> dict[str, object]:
     }
 
 
+def test_claim_generation_prompt_matches_claim_draft_wire_contract() -> None:
+    for field_name in (
+        "text",
+        "materiality",
+        "finding_refs",
+        "scope",
+        "qualifiers",
+    ):
+        assert f"`{field_name}`" in CLAIM_GENERATION_PROMPT
+
+    assert "`task_id` and `finding_id`" in CLAIM_GENERATION_PROMPT
+    assert "otherwise use null" in CLAIM_GENERATION_PROMPT
+    assert "use a list of strings, or an empty list" in CLAIM_GENERATION_PROMPT
+    assert "when no qualifier applies" in CLAIM_GENERATION_PROMPT
+    assert "Do not emit `semantics` or any other extra field" in CLAIM_GENERATION_PROMPT
+    assert "return an empty `claims` list" in CLAIM_GENERATION_PROMPT
+    assert "Return Claim semantics and FindingRefs only" not in CLAIM_GENERATION_PROMPT
+
+
+def test_configured_synthesis_models_preserve_role_mapping_and_policy(
+    monkeypatch,
+) -> None:
+    """Keep A/C on final-report policy and B on compression policy."""
+    monkeypatch.delenv("MODEL_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("FINAL_REPORT_MODEL_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("COMPRESSION_MODEL_ENABLE_THINKING", raising=False)
+    calls: list[dict[str, object]] = []
+
+    class CapturingStructuredModel:
+        def __init__(self, call: dict[str, object]) -> None:
+            self.call = call
+
+        def with_structured_output(self, schema):
+            self.call["schema"] = schema
+            return self
+
+        async def ainvoke(self, _request):
+            raise AssertionError("construction test must not invoke a model")
+
+    def fake_init_chat_model(**kwargs):
+        call = dict(kwargs)
+        calls.append(call)
+        return CapturingStructuredModel(call)
+
+    monkeypatch.setattr(pipeline_runtime, "init_chat_model", fake_init_chat_model)
+    monkeypatch.setattr(
+        pipeline_runtime,
+        "get_api_key_for_model",
+        lambda model_name, _config: f"key-for-{model_name}",
+    )
+
+    models = _configured_synthesis_models(
+        {},
+        Configuration(
+            model_enable_thinking=False,
+            final_report_model="openai:final-role",
+            final_report_model_max_tokens=1500,
+            final_report_model_enable_thinking=None,
+            compression_model="openai:compression-role",
+            compression_model_max_tokens=1000,
+            compression_model_enable_thinking=True,
+        ),
+    )
+
+    assert callable(models.claim_generator)
+    assert callable(models.grounding_judge)
+    assert callable(models.shadow_renderer)
+    assert [call["model"] for call in calls] == [
+        "openai:final-role",
+        "openai:compression-role",
+        "openai:final-role",
+    ]
+    assert [call["max_tokens"] for call in calls] == [1500, 1000, 1500]
+    assert [call["extra_body"] for call in calls] == [
+        {"enable_thinking": False},
+        {"enable_thinking": True},
+        {"enable_thinking": False},
+    ]
+    assert [call["schema"] for call in calls] == [
+        ClaimDraftBatch,
+        ClaimGroundingDraft,
+        ShadowReportDraft,
+    ]
+    assert all(call["max_retries"] == 0 for call in calls)
+
+
 @pytest.mark.asyncio
 async def test_pipeline_happy_path_publishes_manifest_then_report(tmp_path) -> None:
     models = _HappyModels()
@@ -151,7 +241,12 @@ async def test_schema_invalid_claim_sibling_publishes_partial_manifest(tmp_path)
     assert [claim.text for claim in outcome.manifest.claims] == [
         "Treatment improves outcomes."
     ]
-    assert any(issue.code == "CLAIM_SIBLING_OMISSION" for issue in outcome.issues)
+    omission = next(
+        issue for issue in outcome.issues if issue.code == "CLAIM_SIBLING_OMISSION"
+    )
+    assert "invalid=1, duplicate=0, capacity=0" in omission.message
+    assert "sibling[1]" in omission.message
+    assert "materiality" in omission.message
     assert models.calls == {"a": 1, "b": 1, "c": 1}
 
 
@@ -174,7 +269,12 @@ async def test_all_schema_invalid_claims_publish_degraded_empty_manifest(tmp_pat
 
     assert outcome.status is GlobalSynthesisStatus.PARTIAL
     assert outcome.manifest == GroundingManifest(claims=[], groundings=[], citations=[])
-    assert any(issue.code == "CLAIM_SIBLING_OMISSION" for issue in outcome.issues)
+    omission = next(
+        issue for issue in outcome.issues if issue.code == "CLAIM_SIBLING_OMISSION"
+    )
+    assert "invalid=2, duplicate=0, capacity=0" in omission.message
+    assert "sibling[0]" in omission.message
+    assert "sibling[1]" in omission.message
     assert models.calls == {"a": 1, "b": 0, "c": 0}
 
 

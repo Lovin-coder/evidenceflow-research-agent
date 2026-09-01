@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage
+from pydantic import ValidationError
 
 from open_deep_research.domain_models import ClaimMateriality, ClaimRecord, FindingRef
 from open_deep_research.global_synthesis.projection import (
@@ -26,6 +27,21 @@ from open_deep_research.global_synthesis.types import (
 from open_deep_research.prompts import CLAIM_GENERATION_PROMPT
 
 _MODEL_A_TIMEOUT_SECONDS = 90.0
+_MAX_SIBLING_DIAGNOSTIC_CHARS = 384
+_MAX_SIBLING_VALIDATION_ERRORS = 4
+_SAFE_HOST_VALIDATION_MESSAGES = frozenset(
+    {
+        "Claim text exceeds capacity",
+        "Claim scope exceeds capacity",
+        "Claim qualifier count exceeds capacity",
+        "Claim qualifiers must not be blank",
+        "Claim qualifier exceeds capacity",
+        "Claim FindingRefs must not be empty",
+        "Claim FindingRef count exceeds capacity",
+        "Claim FindingRefs must be unique",
+        "Claim FindingRef was not visible to Model A",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +54,33 @@ class ClaimMaterializationOutcome:
     invalid_sibling_count: int
     duplicate_count: int
     capacity_omission_count: int
+    invalid_sibling_diagnostics: tuple[str, ...]
+
+
+def _invalid_sibling_diagnostic(
+    ordinal: int,
+    error: TypeError | ValueError,
+) -> str:
+    """Render bounded validation facts without echoing the raw Model payload."""
+    if isinstance(error, ValidationError):
+        details = error.errors(include_url=False, include_input=False)
+        fragments = [
+            f"{'.'.join(str(part) for part in detail['loc']) or '<root>'}: "
+            f"{detail['msg']}"
+            for detail in details[:_MAX_SIBLING_VALIDATION_ERRORS]
+        ]
+        reason = "; ".join(fragments)
+    elif isinstance(error, TypeError):
+        reason = "Sibling payload is not JSON serializable"
+    else:
+        candidate = str(error)
+        reason = (
+            candidate
+            if candidate in _SAFE_HOST_VALIDATION_MESSAGES
+            else "Sibling failed Host validation"
+        )
+    diagnostic = f"sibling[{ordinal}] {type(error).__name__}: {reason}"
+    return diagnostic[:_MAX_SIBLING_DIAGNOSTIC_CHARS]
 
 
 def _canonical_claim_payload(draft: ClaimDraft) -> bytes:
@@ -125,6 +168,7 @@ def _materialize_claims(
     seen_payloads: set[bytes] = set()
     invalid_count = 0
     duplicate_count = 0
+    invalid_diagnostics: list[str] = []
 
     for ordinal, raw_draft in enumerate(batch.claims):
         try:
@@ -135,8 +179,9 @@ def _materialize_claims(
                 visible_refs=visible_refs,
                 limits=limits,
             )
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as error:
             invalid_count += 1
+            invalid_diagnostics.append(_invalid_sibling_diagnostic(ordinal, error))
             continue
         if payload in seen_payloads:
             duplicate_count += 1
@@ -188,6 +233,7 @@ def _materialize_claims(
         invalid_sibling_count=invalid_count,
         duplicate_count=duplicate_count,
         capacity_omission_count=capacity_omission_count,
+        invalid_sibling_diagnostics=tuple(invalid_diagnostics),
     )
 
 

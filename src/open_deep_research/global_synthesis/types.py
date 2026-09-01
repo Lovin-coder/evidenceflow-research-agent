@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TypeVar
 
-from pydantic import Field, ValidationError
+from pydantic import Field, SerializeAsAny, SkipValidation, ValidationError
 
 from open_deep_research.artifact_store import ArtifactStore
 from open_deep_research.domain_models import (
@@ -49,9 +49,13 @@ class ClaimDraft(ContractModel):
 
 
 class ClaimDraftBatch(ContractModel):
-    """Outer Model A batch shell that preserves raw siblings for Host validation."""
+    """Expose ClaimDraft schema while preserving raw siblings for Host validation.
 
-    claims: list[object]
+    ``SkipValidation`` intentionally leaves runtime items raw; Host materialization
+    remains the final per-sibling validation authority.
+    """
+
+    claims: list[SkipValidation[SerializeAsAny[ClaimDraft]]]
 
 
 class ClaimEvidenceVerdict(str, Enum):

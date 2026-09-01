@@ -57,6 +57,10 @@ from open_deep_research.global_synthesis.types import (
     IssueCollectionOutcome,
     ShadowReportDraft,
 )
+from open_deep_research.model_runtime import (
+    build_model_runtime_fields,
+    resolve_model_enable_thinking,
+)
 from open_deep_research.state import (
     GlobalSynthesisIssue,
     GlobalSynthesisSeverity,
@@ -228,15 +232,20 @@ def _configured_structured_model(
     *,
     model_name: str,
     max_tokens: int,
+    enable_thinking: bool | None,
     schema: type,
     config: RunnableConfig,
 ) -> Callable[[object], Awaitable[object]]:
     """Construct one no-nested-retry structured request boundary."""
-    model = init_chat_model(
+    model_fields = build_model_runtime_fields(
         model=model_name,
         max_tokens=max_tokens,
         api_key=get_api_key_for_model(model_name, config),
+        enable_thinking=enable_thinking,
+    )
+    model = init_chat_model(
         max_retries=0,
+        **model_fields,
     )
     structured = model.with_structured_output(schema)
     return structured.ainvoke
@@ -245,22 +254,33 @@ def _configured_structured_model(
 def _configured_synthesis_models(
     config: RunnableConfig, configurable: Configuration
 ) -> _SynthesisModels:
+    final_report_enable_thinking = resolve_model_enable_thinking(
+        configurable.model_enable_thinking,
+        configurable.final_report_model_enable_thinking,
+    )
+    compression_enable_thinking = resolve_model_enable_thinking(
+        configurable.model_enable_thinking,
+        configurable.compression_model_enable_thinking,
+    )
     return _SynthesisModels(
         claim_generator=_configured_structured_model(
             model_name=configurable.final_report_model,
             max_tokens=configurable.final_report_model_max_tokens,
+            enable_thinking=final_report_enable_thinking,
             schema=ClaimDraftBatch,
             config=config,
         ),
         grounding_judge=_configured_structured_model(
             model_name=configurable.compression_model,
             max_tokens=configurable.compression_model_max_tokens,
+            enable_thinking=compression_enable_thinking,
             schema=ClaimGroundingDraft,
             config=config,
         ),
         shadow_renderer=_configured_structured_model(
             model_name=configurable.final_report_model,
             max_tokens=configurable.final_report_model_max_tokens,
+            enable_thinking=final_report_enable_thinking,
             schema=ShadowReportDraft,
             config=config,
         ),
@@ -412,9 +432,23 @@ async def run_global_synthesis(
             limits=limits,
         )
         if materialized.degradation_observed:
+            invalid_details = " | ".join(
+                materialized.invalid_sibling_diagnostics[:3]
+            )
+            diagnostic_suffix = (
+                f" Invalid sibling diagnostics: {invalid_details}."
+                if invalid_details
+                else ""
+            )
             issue(
                 code="CLAIM_SIBLING_OMISSION",
-                message="One or more Claim proposals were omitted before publication.",
+                message=(
+                    "One or more Claim proposals were omitted before publication: "
+                    f"invalid={materialized.invalid_sibling_count}, "
+                    f"duplicate={materialized.duplicate_count}, "
+                    f"capacity={materialized.capacity_omission_count}."
+                    f"{diagnostic_suffix}"
+                ),
                 degrades=True,
             )
 

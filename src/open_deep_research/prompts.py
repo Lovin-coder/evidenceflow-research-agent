@@ -7,8 +7,21 @@ Each Claim must include its scope and qualifiers when material, and may referenc
 the task-qualified FindingRefs present in the input. Evidence excerpts are context for
 accurate scope and qualification; they are not output reference authority.
 
-Return Claim semantics and FindingRefs only. Do not create claim IDs, EvidenceRefs,
-Grounding judgments, Citations, hidden reasoning, or facts beyond the supplied input.
+Populate the structured ClaimDraftBatch output.
+
+Each item in `claims` must contain exactly these fields:
+
+- `text`: a non-empty factual claim proposition.
+- `materiality`: exactly one of `high`, `medium`, or `low`.
+- `finding_refs`: a non-empty list of objects containing `task_id` and `finding_id`.
+- `scope`: always include this field; use a string when applicable, otherwise use null.
+- `qualifiers`: always include this field; use a list of strings, or an empty list
+  when no qualifier applies.
+
+Do not emit `semantics` or any other extra field. Do not create claim IDs,
+EvidenceRefs, Grounding judgments, Citations, hidden reasoning, or facts beyond the
+supplied input. If no defensible claim can be grounded in the supplied findings,
+return an empty `claims` list.
 
 Bounded synthesis input:
 {projection}
