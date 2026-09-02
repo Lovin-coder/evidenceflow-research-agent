@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import warnings
 from dataclasses import replace
 
 import pytest
 from test_p2_s5_projection import _brief, _result
 
 from open_deep_research.artifact_store import LocalFileArtifactStore
-from open_deep_research.domain_models import ClaimMateriality, FindingRef
+from open_deep_research.domain_models import (
+    ClaimMateriality,
+    FindingRef,
+    ResearchFinding,
+)
 from open_deep_research.global_synthesis.claims import (
+    _invalid_sibling_diagnostic,
     _invoke_claim_generator,
     _materialize_claims,
 )
@@ -78,6 +84,50 @@ def _materialize(tmp_path, drafts: list[object], *, limits=None):
     )
 
 
+def test_claim_batch_exposes_draft_schema_and_serializes_raw_siblings() -> None:
+    schema = ClaimDraftBatch.model_json_schema()
+    item_schema = schema["properties"]["claims"]["items"]
+    if "$ref" in item_schema:
+        definition_name = item_schema["$ref"].removeprefix("#/$defs/")
+        item_schema = schema["$defs"][definition_name]
+
+    assert set(item_schema["properties"]) == {
+        "text",
+        "materiality",
+        "finding_refs",
+        "scope",
+        "qualifiers",
+    }
+    assert item_schema["additionalProperties"] is False
+
+    raw_claims = [
+        _raw_draft("Valid claim"),
+        {"semantics": "invalid sibling"},
+        7,
+    ]
+    batch = ClaimDraftBatch.model_validate({"claims": raw_claims})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        dumped = batch.model_dump(mode="json")
+
+    assert dumped == {"claims": raw_claims}
+    assert caught == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TypeError("secret model payload"),
+        ValueError("secret model payload"),
+    ],
+)
+def test_ordinary_sibling_errors_do_not_echo_model_payload(error) -> None:
+    diagnostic = _invalid_sibling_diagnostic(2, error)
+
+    assert "secret model payload" not in diagnostic
+    assert "sibling[2]" in diagnostic
+
+
 def test_invalid_sibling_is_dropped_without_losing_valid_sibling(tmp_path) -> None:
     outcome = _materialize(
         tmp_path,
@@ -87,6 +137,60 @@ def test_invalid_sibling_is_dropped_without_losing_valid_sibling(tmp_path) -> No
     assert [claim.text for claim in outcome.claims] == ["Valid claim"]
     assert outcome.invalid_sibling_count == 1
     assert outcome.degradation_observed is True
+
+
+def test_zero_evidence_claim_is_dropped_without_losing_valid_siblings(tmp_path) -> None:
+    result = _result("task-1")
+    zero_evidence_finding = ResearchFinding(
+        finding_id="coverage-gap",
+        task_id="task-1",
+        text="No admitted Evidence addressed this dimension.",
+        evidence_ids=[],
+        limitations=["evidence-insufficient"],
+        conflicts=[],
+    )
+    result = result.model_copy(
+        update={"findings": [*result.findings, zero_evidence_finding]}
+    )
+    resolver = TaskQualifiedResolver(
+        [result], LocalFileArtifactStore(tmp_path, "zero-evidence-claim-run")
+    )
+    batch = ClaimDraftBatch(
+        claims=[
+            _raw_draft("Valid claim A"),
+            _raw_draft(
+                "SECRET_ZERO_EVIDENCE_CLAIM_PAYLOAD",
+                finding_id="coverage-gap",
+            ),
+            _raw_draft("Valid claim B"),
+        ]
+    )
+
+    outcome = _materialize_claims(
+        batch,
+        resolver=resolver,
+        generator_visible_finding_refs=[
+            FindingRef(task_id="task-1", finding_id="shared-finding"),
+            FindingRef(task_id="task-1", finding_id="coverage-gap"),
+        ],
+        limits=GlobalSynthesisLimits(),
+    )
+
+    assert [claim.text for claim in outcome.claims] == [
+        "Valid claim A",
+        "Valid claim B",
+    ]
+    assert [receipt.original_generator_ordinal for receipt in outcome.receipts] == [
+        0,
+        2,
+    ]
+    assert outcome.invalid_sibling_count == 1
+    assert "Claim FindingRefs resolve no candidate Evidence" in (
+        outcome.invalid_sibling_diagnostics[0]
+    )
+    assert "SECRET_ZERO_EVIDENCE_CLAIM_PAYLOAD" not in (
+        outcome.invalid_sibling_diagnostics[0]
+    )
 
 
 def test_exact_duplicate_only_and_near_duplicate_survives(tmp_path) -> None:
@@ -117,14 +221,17 @@ def test_claim_identity_uses_original_ordinal_not_survivor_ordinal(tmp_path) -> 
 
 
 def test_schema_invalid_middle_sibling_preserves_original_ordinals(tmp_path) -> None:
-    first = _materialize(
-        tmp_path,
-        [
-            _raw_draft("Claim A"),
-            _raw_draft("Invalid", materiality="critical"),
-            _raw_draft("Claim B"),
-        ],
-    )
+    raw_claims = [
+        _raw_draft("Claim A"),
+        _raw_draft("Invalid", materiality="critical"),
+        _raw_draft("Claim B"),
+    ]
+    batch = ClaimDraftBatch.model_validate({"claims": raw_claims})
+
+    assert all(type(claim) is dict for claim in batch.claims)
+    assert not any(isinstance(claim, ClaimDraft) for claim in batch.claims)
+
+    first = _materialize_batch(tmp_path, batch)
     replay = _materialize(
         tmp_path,
         [
@@ -134,6 +241,7 @@ def test_schema_invalid_middle_sibling_preserves_original_ordinals(tmp_path) -> 
         ],
     )
 
+    assert [claim.text for claim in first.claims] == ["Claim A", "Claim B"]
     assert [receipt.original_generator_ordinal for receipt in first.receipts] == [0, 2]
     assert [claim.claim_id for claim in first.claims] == [
         claim.claim_id for claim in replay.claims

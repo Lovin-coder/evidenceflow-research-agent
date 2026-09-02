@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote
@@ -30,6 +31,7 @@ from open_deep_research.configuration import (
     Configuration,
 )
 from open_deep_research.domain_models import (
+    EVIDENCE_INSUFFICIENT_MARKER,
     MAX_RESULT_EVIDENCE_CHARS,
     MAX_RESULT_EVIDENCE_RECORDS,
     MAX_RESULT_PROVENANCE_SERIALIZED_CHARS,
@@ -53,6 +55,10 @@ from open_deep_research.evidence_ingestion import (
 )
 from open_deep_research.global_synthesis import run_global_synthesis
 from open_deep_research.global_synthesis.pipeline import _contained_pipeline_failure
+from open_deep_research.model_runtime import (
+    build_configurable_model_runtime_config,
+    resolve_model_enable_thinking,
+)
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
@@ -92,6 +98,8 @@ from open_deep_research.utils import (
     remove_up_to_last_ai_message,
     think_tool,
 )
+
+logger = logging.getLogger(__name__)
 
 # Initialize a configurable model that we will use throughout the agent
 configurable_model = init_chat_model(
@@ -238,41 +246,6 @@ def _bootstrap_or_resume_research_run(
         )
 
     raise _ResearchRunLifecycleConflict("Unknown Research Run lifecycle status")
-
-
-def _research_model_runtime_config(
-    configurable: Configuration,
-    config: RunnableConfig,
-) -> RunnableConfig:
-    """Build the narrow internal model config for the research-model boundary.
-
-    The explicit configurable mapping prevents arbitrary caller-supplied provider
-    kwargs from entering the configurable model. Only the typed Thinking policy is
-    translated to ``extra_body``; ``None`` deliberately omits that field.
-
-    Args:
-        configurable: Validated production configuration.
-        config: Runtime configuration used only to resolve the existing model API key.
-
-    Returns:
-        RunnableConfig preserving model/max_tokens/api_key behavior and carrying an
-        optional derived provider Thinking override.
-    """
-    model_fields: dict[str, Any] = {
-        "model": configurable.research_model,
-        "max_tokens": configurable.research_model_max_tokens,
-    }
-    api_key = get_api_key_for_model(configurable.research_model, config)
-    if api_key is not None:
-        model_fields["api_key"] = api_key
-    if configurable.research_model_enable_thinking is not None:
-        model_fields["extra_body"] = {
-            "enable_thinking": configurable.research_model_enable_thinking
-        }
-    return {
-        "configurable": model_fields,
-        "tags": ["langsmith:nostream"],
-    }
 
 
 def _render_evidence_need(evidence_need: EvidenceNeed) -> list[str]:
@@ -442,16 +415,29 @@ class FindingMaterializationError(ValueError):
     """Reject an invalid model semantic batch while preserving valid provenance."""
 
 
+@dataclass(frozen=True, slots=True)
+class _FindingMaterializationOutcome:
+    """Published Findings and limitations retained from omitted no-Evidence drafts."""
+
+    findings: tuple[ResearchFinding, ...]
+    limitations: tuple[str, ...]
+
+
 def _materialize_findings(
     *,
     task: MedicalResearchTask,
     compression: ResearchCompression,
     evidence_records: list[EvidenceRecord],
-) -> list[ResearchFinding]:
+) -> _FindingMaterializationOutcome:
     """Resolve model Evidence references and assign deterministic Finding identities."""
     known_evidence_ids = {record.evidence_id for record in evidence_records}
     findings: list[ResearchFinding] = []
+    omitted_limitations: list[str] = []
     for ordinal, draft in enumerate(compression.findings, start=1):
+        if not draft.evidence_ids:
+            omitted_limitations.append(EVIDENCE_INSUFFICIENT_MARKER)
+            omitted_limitations.extend(draft.limitations)
+            continue
         unknown = set(draft.evidence_ids) - known_evidence_ids
         if unknown:
             raise FindingMaterializationError(
@@ -486,7 +472,10 @@ def _materialize_findings(
             raise FindingMaterializationError(
                 "compression_finding_validation_failure: invalid Finding draft"
             ) from error
-    return findings
+    return _FindingMaterializationOutcome(
+        findings=tuple(findings),
+        limitations=tuple(dict.fromkeys(omitted_limitations)),
+    )
 
 
 def _render_compression_evidence(
@@ -753,7 +742,8 @@ async def _invoke_research_task(
         result = ResearchTaskResult.model_validate(observation["research_task_result"])
         if result.task_id != task.task_id:
             raise ValueError("Researcher returned a result for a different task_id")
-        _validate_research_result_for_publish(
+        await asyncio.to_thread(
+            _validate_research_result_for_publish,
             task,
             result,
             config=config,
@@ -821,7 +811,15 @@ async def clarify_with_user(
     
     # Step 2: Prepare the model for structured clarification analysis
     messages = state["messages"]
-    model_config = _research_model_runtime_config(configurable, config)
+    model_config = build_configurable_model_runtime_config(
+        model=configurable.research_model,
+        max_tokens=configurable.research_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.research_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.research_model_enable_thinking,
+        ),
+    )
     
     # Configure model with structured output and retry logic
     clarification_model = (
@@ -878,7 +876,15 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     """
     # Step 1: Set up the research model for structured output
     configurable = Configuration.from_runnable_config(config)
-    research_model_config = _research_model_runtime_config(configurable, config)
+    research_model_config = build_configurable_model_runtime_config(
+        model=configurable.research_model,
+        max_tokens=configurable.research_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.research_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.research_model_enable_thinking,
+        ),
+    )
     
     # Configure model for structured medical research brief generation
     research_model = (
@@ -944,7 +950,15 @@ async def supervisor(
     artifact_run_id = _artifact_run_id_for_node(
         state.get("artifact_run_id"), config, runtime
     )
-    research_model_config = _research_model_runtime_config(configurable, config)
+    research_model_config = build_configurable_model_runtime_config(
+        model=configurable.research_model,
+        max_tokens=configurable.research_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.research_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.research_model_enable_thinking,
+        ),
+    )
     
     # Available tools: research delegation, completion signaling, and strategic thinking
     lead_researcher_tools = [ConductResearch, ResearchComplete, think_tool]
@@ -1184,7 +1198,15 @@ async def researcher(
         )
     
     # Step 2: Configure the researcher model with tools
-    research_model_config = _research_model_runtime_config(configurable, config)
+    research_model_config = build_configurable_model_runtime_config(
+        model=configurable.research_model,
+        max_tokens=configurable.research_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.research_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.research_model_enable_thinking,
+        ),
+    )
     
     # Prepare system prompt with MCP context if available
     researcher_prompt = research_system_prompt.format(
@@ -1276,6 +1298,7 @@ async def _execute_researcher_tool(
             tool_call_id=tool_call["id"],
         )
     except Exception as error:
+        logger.exception("Tavily execution failed")
         issue = make_research_execution_issue(
             stage=ResearchExecutionStage.TOOL_EXECUTION,
             code="tavily_execution_failed",
@@ -1719,7 +1742,8 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
     evidence_records = list(state.get("evidence_records", []))
 
     # Gate invalid local provenance before it can enter semantic compression.
-    _build_and_publish_research_result(
+    await asyncio.to_thread(
+        _build_and_publish_research_result,
         task=task,
         config=config,
         artifact_run_id=artifact_run_id,
@@ -1733,22 +1757,19 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
         error=None,
     )
 
-    compression_model_fields: dict[str, Any] = {
-        "model": configurable.compression_model,
-        "max_tokens": configurable.compression_model_max_tokens,
-    }
-    compression_api_key = get_api_key_for_model(configurable.compression_model, config)
-    if compression_api_key is not None:
-        compression_model_fields["api_key"] = compression_api_key
+    compression_model_config = build_configurable_model_runtime_config(
+        model=configurable.compression_model,
+        max_tokens=configurable.compression_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.compression_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.compression_model_enable_thinking,
+        ),
+    )
     synthesizer_model = (
         configurable_model.with_structured_output(ResearchCompression)
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
-        .with_config(
-            {
-                "configurable": compression_model_fields,
-                "tags": ["langsmith:nostream"],
-            }
-        )
+        .with_config(compression_model_config)
     )
 
     researcher_messages = list(state.get("researcher_messages", []))
@@ -1768,11 +1789,12 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
             messages = [SystemMessage(content=compression_prompt)] + researcher_messages
             response = await synthesizer_model.ainvoke(messages)
             compression = ResearchCompression.model_validate(response)
-            findings = _materialize_findings(
+            materialized_findings = _materialize_findings(
                 task=task,
                 compression=compression,
                 evidence_records=evidence_records,
             )
+            findings = list(materialized_findings.findings)
             raw_notes_content = "\n".join(
                 str(message.content)
                 for message in filter_messages(
@@ -1782,6 +1804,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
 
             status = state.get("research_task_status", ResearchTaskStatus.SUCCESS)
             limitations = list(compression.limitations)
+            limitations.extend(materialized_findings.limitations)
             limitations.extend(
                 limitation for finding in findings for limitation in finding.limitations
             )
@@ -1803,7 +1826,8 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
                 )
             conflicts = list(compression.conflicts)
             conflicts.extend(conflict for finding in findings for conflict in finding.conflicts)
-            result = _build_and_publish_research_result(
+            result = await asyncio.to_thread(
+                _build_and_publish_research_result,
                 task=task,
                 config=config,
                 artifact_run_id=artifact_run_id,
@@ -1842,16 +1866,18 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
         )
     )
     compression_error = f"{last_compression_failure}: maximum retries exceeded"
+    failed_result = await asyncio.to_thread(
+        _failed_research_result,
+        task,
+        compression_error,
+        source_records=source_records,
+        evidence_records=evidence_records,
+        findings=state.get("findings", []),
+        config=config,
+        artifact_run_id=artifact_run_id,
+    )
     return {
-        "research_task_result": _failed_research_result(
-            task,
-            compression_error,
-            source_records=source_records,
-            evidence_records=evidence_records,
-            findings=state.get("findings", []),
-            config=config,
-            artifact_run_id=artifact_run_id,
-        ),
+        "research_task_result": failed_result,
         "compressed_research": "Error synthesizing research report: Maximum retries exceeded",
         "raw_notes": [raw_notes_content],
     }
@@ -1899,12 +1925,15 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
     
     # Step 2: Configure the final report generation model
     configurable = Configuration.from_runnable_config(config)
-    writer_model_config = {
-        "model": configurable.final_report_model,
-        "max_tokens": configurable.final_report_model_max_tokens,
-        "api_key": get_api_key_for_model(configurable.final_report_model, config),
-        "tags": ["langsmith:nostream"]
-    }
+    writer_model_config = build_configurable_model_runtime_config(
+        model=configurable.final_report_model,
+        max_tokens=configurable.final_report_model_max_tokens,
+        api_key=get_api_key_for_model(configurable.final_report_model, config),
+        enable_thinking=resolve_model_enable_thinking(
+            configurable.model_enable_thinking,
+            configurable.final_report_model_enable_thinking,
+        ),
+    )
     
     # Step 3: Attempt report generation with token limit retry logic
     max_retries = 3
@@ -1991,6 +2020,7 @@ async def global_synthesis(
             existing_issues=existing_issues,
         )
     except Exception as error:
+        logger.exception("Global Synthesis boundary failed")
         outcome = _contained_pipeline_failure(
             error=error,
             existing_manifest=existing_manifest,

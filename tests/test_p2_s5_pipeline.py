@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import re
+from threading import Thread, get_ident
 
 import pytest
 from test_p2_s5_projection import _brief, _result
 
+import open_deep_research.global_synthesis.pipeline as pipeline_runtime
 from open_deep_research.artifact_store import LocalFileArtifactStore
+from open_deep_research.configuration import Configuration
 from open_deep_research.domain_models import (
     ClaimMateriality,
     EvidenceRef,
     FindingRef,
     GroundingManifest,
+    ResearchFinding,
+    ResearchTaskStatus,
 )
 from open_deep_research.global_synthesis.pipeline import (
+    _configured_synthesis_models,
     _SynthesisModels,
     run_global_synthesis,
 )
@@ -27,6 +33,7 @@ from open_deep_research.global_synthesis.types import (
     ReportSectionDraft,
     ShadowReportDraft,
 )
+from open_deep_research.prompts import CLAIM_GENERATION_PROMPT, SHADOW_RENDERER_PROMPT
 from open_deep_research.state import GlobalSynthesisStatus
 
 
@@ -97,35 +104,300 @@ class _RawClaimModels(_HappyModels):
         return {"claims": self.claims}
 
 
-def _raw_claim(text: str, *, materiality: str = "high") -> dict[str, object]:
+def _raw_claim(
+    text: str,
+    *,
+    materiality: str = "high",
+    finding_id: str = "shared-finding",
+) -> dict[str, object]:
     return {
         "text": text,
         "materiality": materiality,
         "finding_refs": [
-            {"task_id": "task-1", "finding_id": "shared-finding"}
+            {"task_id": "task-1", "finding_id": finding_id}
         ],
         "scope": None,
         "qualifiers": [],
     }
 
 
+async def _run_in_test_worker(function, *args, **kwargs):
+    """Run a synchronous factory in a worker that closes with the test."""
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(function(*args, **kwargs))
+        except BaseException as error:
+            errors.append(error)
+
+    worker = Thread(target=run)
+    worker.start()
+    worker.join()
+    if errors:
+        raise errors[0]
+    return results[0]
+
+
+@pytest.fixture(autouse=True)
+def _use_controlled_worker(monkeypatch) -> None:
+    monkeypatch.setattr(pipeline_runtime.asyncio, "to_thread", _run_in_test_worker)
+
+
+def test_claim_generation_prompt_matches_claim_draft_wire_contract() -> None:
+    normalized_prompt = " ".join(CLAIM_GENERATION_PROMPT.split())
+    for field_name in (
+        "text",
+        "materiality",
+        "finding_refs",
+        "scope",
+        "qualifiers",
+    ):
+        assert f"`{field_name}`" in CLAIM_GENERATION_PROMPT
+
+    assert "`task_id` and `finding_id`" in CLAIM_GENERATION_PROMPT
+    assert "otherwise use null" in CLAIM_GENERATION_PROMPT
+    assert "use a list of strings, or an empty list" in CLAIM_GENERATION_PROMPT
+    assert "when no qualifier applies" in CLAIM_GENERATION_PROMPT
+    assert "Do not emit `semantics` or any other extra field" in CLAIM_GENERATION_PROMPT
+    assert "return an empty `claims` list" in CLAIM_GENERATION_PROMPT
+    assert "Only evidence-backed Findings authorize ordinary Claims" in (
+        CLAIM_GENERATION_PROMPT
+    )
+    assert "must yield a non-empty candidate Evidence set" in normalized_prompt
+    assert "must not independently authorize an ordinary Claim" in normalized_prompt
+    assert 'process-level statements such as "no Evidence was found"' in normalized_prompt
+    assert "Conflicts may likewise affect wording or qualifiers" in (
+        CLAIM_GENERATION_PROMPT
+    )
+    assert "Return Claim semantics and FindingRefs only" not in CLAIM_GENERATION_PROMPT
+
+
+def test_shadow_renderer_prompt_preserves_claim_authority_and_host_limitations() -> None:
+    normalized_prompt = " ".join(SHADOW_RENDERER_PROMPT.split())
+
+    assert "renderer, not a new factual authority" in normalized_prompt
+    assert "must not introduce a new factual proposition or interpretation" in (
+        normalized_prompt
+    )
+    assert "Do not add causal, biological, mechanistic, or statistical explanations" in (
+        normalized_prompt
+    )
+    assert "Preserve Claim scope and qualifiers" in SHADOW_RENDERER_PROMPT
+    assert "limitations are Host-owned publication content" in normalized_prompt
+    assert "Do not invent, rewrite, summarize, translate, or add a limitation section" in (
+        normalized_prompt
+    )
+
+
+def test_configured_synthesis_models_preserve_role_mapping_and_policy(
+    monkeypatch,
+) -> None:
+    """Keep A/C on final-report policy and B on compression policy."""
+    monkeypatch.delenv("MODEL_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("FINAL_REPORT_MODEL_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("COMPRESSION_MODEL_ENABLE_THINKING", raising=False)
+    calls: list[dict[str, object]] = []
+
+    class CapturingStructuredModel:
+        def __init__(self, call: dict[str, object]) -> None:
+            self.call = call
+
+        def with_structured_output(self, schema):
+            self.call["schema"] = schema
+            return self
+
+        async def ainvoke(self, _request):
+            raise AssertionError("construction test must not invoke a model")
+
+    def fake_init_chat_model(**kwargs):
+        call = dict(kwargs)
+        calls.append(call)
+        return CapturingStructuredModel(call)
+
+    monkeypatch.setattr(pipeline_runtime, "init_chat_model", fake_init_chat_model)
+    monkeypatch.setattr(
+        pipeline_runtime,
+        "get_api_key_for_model",
+        lambda model_name, _config: f"key-for-{model_name}",
+    )
+
+    models = _configured_synthesis_models(
+        {},
+        Configuration(
+            model_enable_thinking=False,
+            final_report_model="openai:final-role",
+            final_report_model_max_tokens=1500,
+            final_report_model_enable_thinking=None,
+            compression_model="openai:compression-role",
+            compression_model_max_tokens=1000,
+            compression_model_enable_thinking=True,
+        ),
+    )
+
+    assert callable(models.claim_generator)
+    assert callable(models.grounding_judge)
+    assert callable(models.shadow_renderer)
+    assert [call["model"] for call in calls] == [
+        "openai:final-role",
+        "openai:compression-role",
+        "openai:final-role",
+    ]
+    assert [call["max_tokens"] for call in calls] == [1500, 1000, 1500]
+    assert [call["extra_body"] for call in calls] == [
+        {"enable_thinking": False},
+        {"enable_thinking": True},
+        {"enable_thinking": False},
+    ]
+    assert [call["schema"] for call in calls] == [
+        ClaimDraftBatch,
+        ClaimGroundingDraft,
+        ShadowReportDraft,
+    ]
+    assert all(call["max_retries"] == 0 for call in calls)
+
+
 @pytest.mark.asyncio
-async def test_pipeline_happy_path_publishes_manifest_then_report(tmp_path) -> None:
+async def test_pipeline_happy_path_publishes_manifest_then_report(
+    monkeypatch,
+    tmp_path,
+) -> None:
     models = _HappyModels()
+    event_loop_thread = get_ident()
+    factory_threads: list[int] = []
+    get_text_threads: list[int] = []
+    store = LocalFileArtifactStore(tmp_path, "pipeline-run")
+    original_get_text = store.get_text
+
+    def recording_get_text(artifact_ref):
+        get_text_threads.append(get_ident())
+        return original_get_text(artifact_ref)
+
+    def fake_artifact_store_from_config(_config, artifact_run_id):
+        factory_threads.append(get_ident())
+        assert artifact_run_id == "pipeline-run"
+        return store
+
+    monkeypatch.setattr(
+        pipeline_runtime,
+        "artifact_store_from_config",
+        fake_artifact_store_from_config,
+    )
+    monkeypatch.setattr(store, "get_text", recording_get_text)
+
     outcome = await run_global_synthesis(
         medical_research_brief=_brief(),
         research_results=[_result("task-1")],
         artifact_run_id="pipeline-run",
         config={"configurable": {"max_structured_output_retries": 0}},
-        artifact_store=LocalFileArtifactStore(tmp_path, "pipeline-run"),
         models=models.bundle(),
     )
 
+    assert len(factory_threads) == 1
+    assert factory_threads[0] != event_loop_thread
+    assert get_text_threads and all(
+        thread_id != event_loop_thread for thread_id in get_text_threads
+    )
     assert outcome.status is GlobalSynthesisStatus.SUCCESS
     assert outcome.manifest is not None
     assert len(outcome.manifest.claims) == 1
     assert len(outcome.manifest.citations) == 1
     assert outcome.shadow_report is not None
+    assert "## Research Limitations and Execution Constraints" not in outcome.shadow_report
+    assert models.calls == {"a": 1, "b": 1, "c": 1}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_appends_partial_research_limitations_in_stable_order(
+    tmp_path,
+) -> None:
+    first = _result("task-1").model_copy(
+        update={
+            "status": ResearchTaskStatus.PARTIAL,
+            "limitations": ["limitation A", "limitation B"],
+        }
+    )
+    second = _result("task-2").model_copy(
+        update={"limitations": ["limitation B", "limitation C"]}
+    )
+    outcome = await run_global_synthesis(
+        medical_research_brief=_brief(),
+        research_results=[first, second],
+        artifact_run_id="limitation-append-run",
+        config={"configurable": {"max_structured_output_retries": 0}},
+        artifact_store=LocalFileArtifactStore(tmp_path, "limitation-append-run"),
+        models=_HappyModels().bundle(),
+    )
+
+    assert outcome.status is GlobalSynthesisStatus.SUCCESS
+    assert outcome.shadow_report is not None
+    appendix = outcome.shadow_report[
+        outcome.shadow_report.index("## Research Limitations and Execution Constraints") :
+    ]
+    assert appendix.splitlines() == [
+        "## Research Limitations and Execution Constraints",
+        "",
+        "- limitation A",
+        "- limitation B",
+        "- limitation C",
+    ]
+    assert outcome.shadow_report.count("- limitation B") == 1
+    assert "Treatment improves outcomes." in outcome.shadow_report
+    assert outcome.issues == ()
+
+
+@pytest.mark.asyncio
+async def test_zero_evidence_claim_is_omitted_before_grounding(tmp_path) -> None:
+    result = _result("task-1")
+    result = result.model_copy(
+        update={
+            "findings": [
+                *result.findings,
+                ResearchFinding(
+                    finding_id="coverage-gap",
+                    task_id="task-1",
+                    text="No admitted Evidence addressed this dimension.",
+                    evidence_ids=[],
+                    limitations=["evidence-insufficient"],
+                    conflicts=[],
+                ),
+            ]
+        }
+    )
+    models = _RawClaimModels(
+        [
+            _raw_claim("Treatment improves outcomes."),
+            _raw_claim(
+                "No Evidence was found for another dimension.",
+                finding_id="coverage-gap",
+            ),
+        ]
+    )
+
+    outcome = await run_global_synthesis(
+        medical_research_brief=_brief(),
+        research_results=[result],
+        artifact_run_id="zero-evidence-claim-run",
+        config={"configurable": {"max_structured_output_retries": 0}},
+        artifact_store=LocalFileArtifactStore(tmp_path, "zero-evidence-claim-run"),
+        models=models.bundle(),
+    )
+
+    assert outcome.status is GlobalSynthesisStatus.PARTIAL
+    assert outcome.manifest is not None
+    assert [claim.text for claim in outcome.manifest.claims] == [
+        "Treatment improves outcomes."
+    ]
+    assert len(outcome.manifest.groundings) == 1
+    assert not any(
+        issue.code == "GROUNDING_UNASSESSED" for issue in outcome.issues
+    )
+    omission = next(
+        issue for issue in outcome.issues if issue.code == "CLAIM_SIBLING_OMISSION"
+    )
+    assert "invalid=1, duplicate=0, capacity=0" in omission.message
+    assert "Claim FindingRefs resolve no candidate Evidence" in omission.message
     assert models.calls == {"a": 1, "b": 1, "c": 1}
 
 
@@ -151,7 +423,12 @@ async def test_schema_invalid_claim_sibling_publishes_partial_manifest(tmp_path)
     assert [claim.text for claim in outcome.manifest.claims] == [
         "Treatment improves outcomes."
     ]
-    assert any(issue.code == "CLAIM_SIBLING_OMISSION" for issue in outcome.issues)
+    omission = next(
+        issue for issue in outcome.issues if issue.code == "CLAIM_SIBLING_OMISSION"
+    )
+    assert "invalid=1, duplicate=0, capacity=0" in omission.message
+    assert "sibling[1]" in omission.message
+    assert "materiality" in omission.message
     assert models.calls == {"a": 1, "b": 1, "c": 1}
 
 
@@ -174,7 +451,12 @@ async def test_all_schema_invalid_claims_publish_degraded_empty_manifest(tmp_pat
 
     assert outcome.status is GlobalSynthesisStatus.PARTIAL
     assert outcome.manifest == GroundingManifest(claims=[], groundings=[], citations=[])
-    assert any(issue.code == "CLAIM_SIBLING_OMISSION" for issue in outcome.issues)
+    omission = next(
+        issue for issue in outcome.issues if issue.code == "CLAIM_SIBLING_OMISSION"
+    )
+    assert "invalid=2, duplicate=0, capacity=0" in omission.message
+    assert "sibling[0]" in omission.message
+    assert "sibling[1]" in omission.message
     assert models.calls == {"a": 1, "b": 0, "c": 0}
 
 

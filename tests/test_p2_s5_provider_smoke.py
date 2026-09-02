@@ -21,6 +21,7 @@ from open_deep_research.configuration import Configuration
 from open_deep_research.domain_models import (
     EvidenceNeed,
     EvidenceRecord,
+    GroundingManifest,
     GroundingStatus,
     MedicalResearchBrief,
     ResearchFinding,
@@ -34,15 +35,65 @@ from open_deep_research.global_synthesis.pipeline import (
     run_global_synthesis,
 )
 from open_deep_research.global_synthesis.projection import TaskQualifiedResolver
-from open_deep_research.global_synthesis.renderer import build_source_display_entries
+from open_deep_research.global_synthesis.renderer import (
+    SourceDisplayEntry,
+    build_source_display_entries,
+)
+from open_deep_research.model_runtime import resolve_model_enable_thinking
 from open_deep_research.state import GlobalSynthesisStatus
 
 _RUN_PROVIDER_SMOKE = os.getenv("EVIDENCEFLOW_RUN_PROVIDER_SMOKE") == "1"
 
-pytestmark = pytest.mark.skipif(
-    not _RUN_PROVIDER_SMOKE,
-    reason="set EVIDENCEFLOW_RUN_PROVIDER_SMOKE=1 to run real-provider smoke",
-)
+
+def _parse_optional_bool(value: str | None, *, name: str) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true"}:
+        return True
+    if normalized in {"0", "false"}:
+        return False
+    raise ValueError(f"{name} must be one of: 1, true, 0, false")
+
+
+def _resolve_evaluator_model(configured_value: str | None, fallback: str) -> str:
+    return configured_value or fallback
+
+
+async def _run_evaluator_smoke(
+    *,
+    enabled: bool,
+    shadow_report: str,
+    manifest: GroundingManifest,
+    display_entries: list[SourceDisplayEntry],
+    model_name: str,
+    enable_thinking_value: str | None,
+) -> tuple[str, str | None, bool | None]:
+    if not enabled:
+        return "NOT_EXECUTED", None, None
+    try:
+        enable_thinking = _parse_optional_bool(
+            enable_thinking_value,
+            name="EVIDENCEFLOW_EVALUATOR_ENABLE_THINKING",
+        )
+        evaluator_input = build_faithfulness_input(
+            shadow_report=shadow_report,
+            manifest=manifest,
+            display_entries=display_entries,
+        )
+        evaluator_result = await evaluate_faithfulness_live(
+            evaluator_input,
+            model_name=model_name,
+            enable_thinking=enable_thinking,
+            max_retries=1,
+        )
+        return (
+            "EXECUTED",
+            "PASS" if evaluator_result.passed else "FAIL",
+            enable_thinking,
+        )
+    except Exception as error:
+        return f"OPERATIONAL_FAILURE:{type(error).__name__}", None, None
 
 
 def _provider_fixture(
@@ -116,6 +167,91 @@ def _provider_fixture(
     return brief, result
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, None), ("1", True), ("true", True), ("0", False), ("FALSE", False)],
+)
+def test_evaluator_thinking_env_parser_preserves_explicit_values(
+    value: str | None,
+    expected: bool | None,
+) -> None:
+    assert _parse_optional_bool(
+        value,
+        name="EVIDENCEFLOW_EVALUATOR_ENABLE_THINKING",
+    ) is expected
+
+
+def test_evaluator_model_falls_back_to_final_report_role() -> None:
+    assert _resolve_evaluator_model(None, "openai:final-role") == "openai:final-role"
+    assert _resolve_evaluator_model("judge-model", "openai:final-role") == "judge-model"
+
+
+@pytest.mark.asyncio
+async def test_evaluator_smoke_requires_independent_opt_in(monkeypatch) -> None:
+    async def forbidden_evaluator(*_args, **_kwargs):
+        raise AssertionError("evaluator request must not be made")
+
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "evaluate_faithfulness_live",
+        forbidden_evaluator,
+    )
+    status, verdict, thinking = await _run_evaluator_smoke(
+        enabled=False,
+        shadow_report="report",
+        manifest=GroundingManifest(claims=[], groundings=[], citations=[]),
+        display_entries=[],
+        model_name="openai:test-model",
+        enable_thinking_value="false",
+    )
+
+    assert (status, verdict, thinking) == ("NOT_EXECUTED", None, None)
+
+
+@pytest.mark.asyncio
+async def test_evaluator_smoke_passes_explicit_independent_policy(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build_input(**_kwargs):
+        return object()
+
+    async def fake_evaluator(
+        _evaluator_input,
+        *,
+        model_name,
+        enable_thinking,
+        max_retries,
+    ):
+        captured.update(
+            model_name=model_name,
+            enable_thinking=enable_thinking,
+            max_retries=max_retries,
+        )
+
+        class PassingResult:
+            passed = True
+
+        return PassingResult()
+
+    monkeypatch.setattr(sys.modules[__name__], "build_faithfulness_input", fake_build_input)
+    monkeypatch.setattr(sys.modules[__name__], "evaluate_faithfulness_live", fake_evaluator)
+    status, verdict, thinking = await _run_evaluator_smoke(
+        enabled=True,
+        shadow_report="report",
+        manifest=GroundingManifest(claims=[], groundings=[], citations=[]),
+        display_entries=[],
+        model_name="openai:test-model",
+        enable_thinking_value="false",
+    )
+
+    assert (status, verdict, thinking) == ("EXECUTED", "PASS", False)
+    assert captured == {
+        "model_name": "openai:test-model",
+        "enable_thinking": False,
+        "max_retries": 1,
+    }
+
+
 def _measured_models(
     configured: _SynthesisModels,
 ) -> tuple[_SynthesisModels, dict[str, int], dict[str, list[float]]]:
@@ -151,7 +287,11 @@ def _measured_models(
 
 
 @pytest.mark.asyncio
-async def test_p2_s5_real_provider_smoke(tmp_path: Path) -> None:
+@pytest.mark.skipif(
+    not _RUN_PROVIDER_SMOKE,
+    reason="set EVIDENCEFLOW_RUN_PROVIDER_SMOKE=1 to run real-provider smoke",
+)
+async def test_p2_s5_real_provider_smoke(tmp_path: Path, monkeypatch) -> None:
     load_dotenv()
     missing = [
         name
@@ -161,11 +301,24 @@ async def test_p2_s5_real_provider_smoke(tmp_path: Path) -> None:
     if missing:
         pytest.skip("provider environment unavailable: missing " + ", ".join(missing))
 
+    for name in (
+        "MODEL_ENABLE_THINKING",
+        "FINAL_REPORT_MODEL_ENABLE_THINKING",
+        "COMPRESSION_MODEL_ENABLE_THINKING",
+        "FINAL_REPORT_MODEL_MAX_TOKENS",
+        "COMPRESSION_MODEL_MAX_TOKENS",
+        "MAX_STRUCTURED_OUTPUT_RETRIES",
+        "MAX_CONCURRENT_GROUNDING_JUDGMENTS",
+    ):
+        monkeypatch.delenv(name, raising=False)
     config = {
         "configurable": {
             "artifact_store_root": str(tmp_path),
+            "model_enable_thinking": False,
+            "final_report_model_max_tokens": 1500,
+            "compression_model_max_tokens": 1000,
             "max_structured_output_retries": 1,
-            "max_concurrent_grounding_judgments": 2,
+            "max_concurrent_grounding_judgments": 1,
         }
     }
     configurable = Configuration.from_runnable_config(config)
@@ -237,24 +390,38 @@ async def test_p2_s5_real_provider_smoke(tmp_path: Path) -> None:
         artifact_run_id=run_id,
         artifact_store=store,
     )
-    evaluator_status = "NOT_EXECUTED"
-    evaluator_verdict: str | None = None
-    evaluator_model = os.getenv("EVIDENCEFLOW_EVALUATOR_MODEL", "gpt-4.1")
-    try:
-        evaluator_input = build_faithfulness_input(
+    evaluator_enabled = os.getenv("EVIDENCEFLOW_RUN_EVALUATOR_SMOKE") == "1"
+    evaluator_model = _resolve_evaluator_model(
+        os.getenv("EVIDENCEFLOW_EVALUATOR_MODEL"),
+        configurable.final_report_model,
+    )
+    evaluator_status, evaluator_verdict, evaluator_thinking = (
+        await _run_evaluator_smoke(
+            enabled=evaluator_enabled,
             shadow_report=outcome.shadow_report,
             manifest=outcome.manifest,
             display_entries=display_entries,
-        )
-        evaluator_result = await evaluate_faithfulness_live(
-            evaluator_input,
             model_name=evaluator_model,
-            max_retries=1,
+            enable_thinking_value=os.getenv(
+                "EVIDENCEFLOW_EVALUATOR_ENABLE_THINKING"
+            ),
         )
-        evaluator_status = "EXECUTED"
-        evaluator_verdict = "PASS" if evaluator_result.passed else "FAIL"
-    except Exception as error:
-        evaluator_status = f"OPERATIONAL_FAILURE:{type(error).__name__}"
+    )
+    final_report_thinking = resolve_model_enable_thinking(
+        configurable.model_enable_thinking,
+        configurable.final_report_model_enable_thinking,
+    )
+    compression_thinking = resolve_model_enable_thinking(
+        configurable.model_enable_thinking,
+        configurable.compression_model_enable_thinking,
+    )
+    thinking_policy: dict[str, bool | None] = {
+        "model_a": final_report_thinking,
+        "model_b": compression_thinking,
+        "model_c": final_report_thinking,
+    }
+    if evaluator_enabled:
+        thinking_policy["evaluator"] = evaluator_thinking
 
     sys.stdout.write(
         json.dumps(
@@ -268,13 +435,18 @@ async def test_p2_s5_real_provider_smoke(tmp_path: Path) -> None:
                 ),
                 "global_synthesis_status": outcome.status.value,
                 "issues": [
-                    {"code": issue.code, "severity": issue.severity.value}
-                    for issue in outcome.issues
+                    issue.model_dump(mode="json") for issue in outcome.issues
                 ],
                 "model_mapping": {
                     "model_a": configurable.final_report_model,
                     "model_b": configurable.compression_model,
                     "model_c": configurable.final_report_model,
+                },
+                "thinking_policy": thinking_policy,
+                "max_output_tokens": {
+                    "model_a": configurable.final_report_model_max_tokens,
+                    "model_b": configurable.compression_model_max_tokens,
+                    "model_c": configurable.final_report_model_max_tokens,
                 },
                 "request_counts": request_counts,
                 "retry_counts": retry_counts,

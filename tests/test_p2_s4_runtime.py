@@ -1,6 +1,7 @@
 """Deterministic integration coverage for the complete P2-S4 runtime path."""
 
 import importlib
+from threading import Thread, get_ident
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -32,6 +33,30 @@ from open_deep_research.utils import (
 runtime = importlib.import_module("open_deep_research.deep_researcher")
 
 
+async def _run_in_test_worker(function, *args, **kwargs):
+    """Run synchronous Store work in a worker that closes with the test."""
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(function(*args, **kwargs))
+        except BaseException as error:
+            errors.append(error)
+
+    worker = Thread(target=run)
+    worker.start()
+    worker.join()
+    if errors:
+        raise errors[0]
+    return results[0]
+
+
+@pytest.fixture(autouse=True)
+def _use_controlled_worker(monkeypatch) -> None:
+    monkeypatch.setattr(runtime.asyncio, "to_thread", _run_in_test_worker)
+
+
 class SelectingModel:
     """Choose one deterministic Candidate without authoring Evidence fields."""
 
@@ -50,6 +75,7 @@ class CompressionModel:
         self.evidence_id = evidence_id
         self.structured_schema = None
         self.messages = []
+        self.bound_configs = []
 
     def with_structured_output(self, schema):
         self.structured_schema = schema
@@ -58,7 +84,8 @@ class CompressionModel:
     def with_retry(self, **_kwargs):
         return self
 
-    def with_config(self, _config):
+    def with_config(self, config):
+        self.bound_configs.append(config)
         return self
 
     async def ainvoke(self, messages):
@@ -94,6 +121,15 @@ class EmptyCompressionModel(CompressionModel):
             limitations=[],
             conflicts=[],
         )
+
+
+def test_research_compression_prompt_separates_findings_from_coverage_gaps() -> None:
+    prompt = runtime.compress_research_system_prompt
+
+    assert "must reference at least one materialized, admitted Evidence ID" in prompt
+    assert "do not create a ResearchFinding with an empty evidence_ids list" in prompt
+    assert "task-level limitations" in prompt
+    assert 'exact marker "evidence-insufficient"' in prompt
 
 
 class SupervisorSequenceModel:
@@ -337,8 +373,26 @@ async def test_deterministic_complete_s4_path_crosses_both_agent_boundaries(
             "search_api": "tavily",
             "max_search_tool_message_chars": 8_000,
             "max_supervisor_result_projection_chars": 4_000,
+            "model_enable_thinking": False,
+            "compression_model_enable_thinking": True,
         }
     }
+    event_loop_thread = get_ident()
+    get_text_threads: list[int] = []
+    factory_threads: list[int] = []
+    original_get_text = LocalFileArtifactStore.get_text
+    original_factory = runtime.artifact_store_from_config
+
+    def recording_get_text(store, artifact_ref):
+        get_text_threads.append(get_ident())
+        return original_get_text(store, artifact_ref)
+
+    def recording_factory(config, artifact_run_id):
+        factory_threads.append(get_ident())
+        return original_factory(config, artifact_run_id)
+
+    monkeypatch.setattr(LocalFileArtifactStore, "get_text", recording_get_text)
+    monkeypatch.setattr(runtime, "artifact_store_from_config", recording_factory)
     store = LocalFileArtifactStore(tmp_path, "integration-run")
     search_result = await execute_tavily_search_structured(
         ["treatment guideline benefits harms"],
@@ -419,6 +473,9 @@ async def test_deterministic_complete_s4_path_crosses_both_agent_boundaries(
     )
 
     assert compression_model.structured_schema is runtime.ResearchCompression
+    assert compression_model.bound_configs[-1]["configurable"]["extra_body"] == {
+        "enable_thinking": True
+    }
     compression_context = "\n".join(str(message.content) for message in compression_model.messages)
     assert search_result.evidences[0].evidence_id in compression_context
     assert search_result.evidences[0].excerpt in compression_context
@@ -435,7 +492,13 @@ async def test_deterministic_complete_s4_path_crosses_both_agent_boundaries(
 
     source = result.source_records[0]
     evidence = result.evidence_records[0]
-    artifact = store.get_text(source.artifact_ref)
+    assert factory_threads and all(
+        thread_id != event_loop_thread for thread_id in factory_threads
+    )
+    assert get_text_threads and all(
+        thread_id != event_loop_thread for thread_id in get_text_threads
+    )
+    artifact = original_get_text(store, source.artifact_ref)
     start, end = parse_locator(evidence.locator)
     assert artifact[start:end] == evidence.excerpt
 
@@ -519,6 +582,71 @@ async def test_structured_issue_degrades_status_when_tool_message_omits_warning(
     )
 
     assert compressed["research_task_result"].status is ResearchTaskStatus.PARTIAL
+
+
+@pytest.mark.asyncio
+async def test_tavily_failure_logs_traceback_without_exposing_domain_payload(
+    monkeypatch,
+    caplog,
+) -> None:
+    async def failing_search(**_kwargs):
+        raise RuntimeError("SECRET_PROVIDER_PAYLOAD")
+
+    async def fixed_tools(_config):
+        return [NamedTool("tavily_search")]
+
+    monkeypatch.setattr(runtime, "execute_tavily_search_structured", failing_search)
+    monkeypatch.setattr(runtime, "get_all_tools", fixed_tools)
+    caplog.set_level("ERROR", logger=runtime.__name__)
+
+    command = await runtime.researcher_tools(
+        {
+            "task": task(),
+            "research_topic": runtime.render_medical_research_task(task()),
+            "researcher_messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "tavily_search",
+                            "id": "failed-search",
+                            "args": {"queries": ["bounded query"]},
+                        }
+                    ],
+                )
+            ],
+            "tool_call_iterations": 1,
+            "source_records": [],
+            "evidence_records": [],
+            "findings": [],
+            "execution_issues": [],
+            "execution_failure_observed": False,
+        },
+        {
+            "configurable": {
+                "search_api": "tavily",
+                "max_react_tool_calls": 1,
+            }
+        },
+    )
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Tavily execution failed"
+    ]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is RuntimeError
+    assert command.update["source_records"] == []
+    assert command.update["evidence_records"] == []
+    issue = command.update["execution_issues"][0]
+    assert issue.code == "tavily_execution_failed"
+    assert issue.message == "Tavily execution failed with RuntimeError."
+    assert "SECRET_PROVIDER_PAYLOAD" not in issue.message
+    assert "SECRET_PROVIDER_PAYLOAD" not in command.update[
+        "researcher_messages"
+    ][0].content
 
 
 @pytest.mark.asyncio
@@ -634,6 +762,81 @@ async def test_provenance_payload_bound_participates_in_state_admission(
         )
         <= configured_bound
     )
+
+
+@pytest.mark.asyncio
+async def test_compression_omits_zero_evidence_finding_and_preserves_limitation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Publish Evidence-backed siblings and retain no-Evidence semantics as limitations."""
+    artifact_run_id = "zero-evidence-finding-run"
+    run_config = {
+        "configurable": {
+            "artifact_store_root": str(tmp_path),
+            "artifact_run_id": artifact_run_id,
+        }
+    }
+    search_result = await execute_tavily_search_structured(
+        ["treatment guideline benefits harms"],
+        config=run_config,
+        provider_responses=[provider_fixture()],
+        selection_model=SelectingModel(),
+        artifact_store=LocalFileArtifactStore(tmp_path, artifact_run_id),
+    )
+
+    class MixedCompressionModel(CompressionModel):
+        async def ainvoke(self, messages):
+            self.messages = messages
+            return runtime.ResearchCompression(
+                summary="One conclusion was supported; one dimension lacked evidence.",
+                findings=[
+                    runtime.FindingDraft(
+                        text="The recommendation supports individualized treatment.",
+                        evidence_ids=[self.evidence_id],
+                        limitations=[],
+                        conflicts=[],
+                    ),
+                    runtime.FindingDraft(
+                        text="SECRET_ZERO_EVIDENCE_PROVIDER_PAYLOAD",
+                        evidence_ids=[],
+                        limitations=[
+                            "No admitted Evidence covered the requested subgroup."
+                        ],
+                        conflicts=[],
+                    ),
+                ],
+                limitations=[],
+                conflicts=[],
+            )
+
+    monkeypatch.setattr(
+        runtime,
+        "configurable_model",
+        MixedCompressionModel(search_result.evidences[0].evidence_id),
+    )
+
+    output = await runtime.compress_research(
+        {
+            "task": task(),
+            "artifact_run_id": artifact_run_id,
+            "researcher_messages": [AIMessage(content="Valid evidence was collected")],
+            "research_task_status": ResearchTaskStatus.SUCCESS,
+            "source_records": search_result.sources,
+            "evidence_records": search_result.evidences,
+            "findings": [],
+        },
+        run_config,
+    )
+
+    result = ResearchTaskResult.model_validate(output["research_task_result"])
+    assert [finding.text for finding in result.findings] == [
+        "The recommendation supports individualized treatment."
+    ]
+    assert result.findings[0].evidence_ids == [search_result.evidences[0].evidence_id]
+    assert "evidence-insufficient" in result.limitations
+    assert "No admitted Evidence covered the requested subgroup." in result.limitations
+    assert "SECRET_ZERO_EVIDENCE_PROVIDER_PAYLOAD" not in result.model_dump_json()
 
 
 @pytest.mark.asyncio

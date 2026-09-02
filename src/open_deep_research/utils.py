@@ -48,6 +48,10 @@ from open_deep_research.evidence_ingestion import (
     sanitize_candidate_selection,
     select_webpage_chunks,
 )
+from open_deep_research.model_runtime import (
+    build_model_runtime_fields,
+    resolve_model_enable_thinking,
+)
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import (
     ResearchComplete,
@@ -56,6 +60,8 @@ from open_deep_research.state import (
     ResearchExecutionStage,
     make_research_execution_issue,
 )
+
+logger = logging.getLogger(__name__)
 
 ##########################
 # Tavily Search Tool Utils
@@ -165,15 +171,29 @@ async def execute_tavily_search_structured(
     retrieved_at = datetime.now(timezone.utc)
 
     configurable = Configuration.from_runnable_config(config)
-    store = artifact_store or artifact_store_from_config(config, artifact_run_id)
+    if artifact_store is not None:
+        store = artifact_store
+    else:
+        store = await asyncio.to_thread(
+            artifact_store_from_config,
+            config,
+            artifact_run_id,
+        )
     if selection_model is None:
         model_api_key = get_api_key_for_model(configurable.summarization_model, config)
+        model_fields = build_model_runtime_fields(
+            model=configurable.summarization_model,
+            max_tokens=configurable.summarization_model_max_tokens,
+            api_key=model_api_key,
+            enable_thinking=resolve_model_enable_thinking(
+                configurable.model_enable_thinking,
+                configurable.summarization_model_enable_thinking,
+            ),
+        )
         selection_model = (
             init_chat_model(
-                model=configurable.summarization_model,
-                max_tokens=configurable.summarization_model_max_tokens,
-                api_key=model_api_key,
                 tags=["langsmith:nostream"],
+                **model_fields,
             )
             .with_structured_output(WebpageSelection)
             .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
@@ -305,7 +325,10 @@ async def execute_tavily_search_structured(
                 degrades_task_status=False,
                 occurrence_key=f"result:{ordinal}:normalized",
             )
-        artifact_ref = store.put_text(normalized_text)
+        artifact_ref = await asyncio.to_thread(
+            store.put_text,
+            normalized_text,
+        )
         source = build_source_record(
             url=url,
             title=title,
@@ -356,7 +379,8 @@ async def execute_tavily_search_structured(
                 )
                 try:
                     evidences.extend(
-                        materialize_evidence(
+                        await asyncio.to_thread(
+                            materialize_evidence,
                             source=source,
                             candidates=candidates,
                             selection=single_selection,
@@ -424,6 +448,10 @@ async def execute_tavily_search_structured(
     processed: list[_ProcessedSearchResult] = []
     for index, item in enumerate(processed_or_errors, start=1):
         if isinstance(item, BaseException):
+            logger.error(
+                "Tavily result ingestion failed",
+                exc_info=(type(item), item, item.__traceback__),
+            )
             ingestion_issue = issue(
                 stage=ResearchExecutionStage.MATERIALIZATION,
                 code="result_ingestion_failed",

@@ -263,3 +263,345 @@ Derived Presentation View
 ```
 
 这比把 Source identity 升级为跨 Task/global identity 更小、更清晰，也保持 Evidence-level auditability。
+
+# ClaimDraftBatch Provider Schema 与 Runtime Salvage 边界分析
+
+## 背景
+
+EvidenceFlow 的 Global Synthesis 阶段中：
+
+- ClaimDraft 表示 Model A 生成的 Claim proposal；
+- ClaimRecord 表示经过 Host validation、identity assignment 和 provenance binding 后的 canonical record。
+
+当前链路：
+
+Model A
+→ ClaimDraftBatch
+→ ClaimDraft validation
+→ ClaimRecord materialization
+
+其中：
+
+ClaimDraft 不代表可信最终对象，而是模型生成后的中间 proposal。
+
+Host 仍然拥有最终 validation ownership。
+
+## 当前设计中的 ClaimDraftBatch 取舍
+
+当前 ClaimDraftBatch 使用 raw sibling container：
+
+claims: list[object]
+
+该设计不是临时绕过，也不是类型缺失，而是为了满足 EvidenceFlow 的 reliability 目标：
+
+- sibling-level validation；
+- invalid sibling isolation；
+- partial salvage；
+- 避免单个错误 Claim 导致整个 batch failure。
+
+如果直接使用：
+
+claims: list[ClaimDraft]
+
+Pydantic nested validation 会表现为 batch atomic validation：
+
+- 任意 sibling 不满足 ClaimDraft contract；
+- 整个 ClaimDraftBatch 构造失败；
+- 其他合法 sibling 无法继续 materialize。
+
+因此：
+
+list[object]
+
+体现的是：
+
+Runtime salvage boundary。
+
+它保证 Host 可以逐 sibling 判断：
+
+valid sibling:
+→ ClaimDraft
+→ ClaimRecord
+
+invalid sibling:
+→ diagnostic issue
+
+而不是整个 batch 失败。
+
+## 当前暴露的问题
+
+该设计同时带来了 Provider-facing schema 弱化问题。
+
+由于：
+
+claims: list[object]
+
+structured output schema 无法向模型明确暴露 ClaimDraft 字段。
+
+Provider 看到：
+
+claims:
+  array
+    items: {}
+
+而不是：
+
+claims:
+  array
+    items:
+      text
+      materiality
+      finding_refs
+      qualifiers
+
+因此：
+
+- Model A 缺少明确 wire contract；
+- 可能生成语义正确但字段不符合 Host contract 的 JSON；
+- Host validation 可以发现问题，但无法提前约束模型输出。
+
+该问题属于：
+
+Provider-facing schema 与 Runtime validation ownership 的边界问题。
+
+不是：
+
+- ClaimDraft domain contract 错误；
+- ClaimRecord 设计错误；
+- Grounding 设计错误；
+- Manifest / Publication 设计错误。
+
+## Considered Solutions
+
+### Solution 1: list[ClaimDraft]
+
+优势：
+
+- Provider schema 完整；
+- Structured Output 约束增强；
+- 模型输出格式更加稳定。
+
+问题：
+
+- 重新引入 batch atomic validation；
+- invalid sibling 会导致整个 batch rejection；
+- 与 EvidenceFlow 当前 sibling salvage 设计冲突。
+
+当前不采用。
+
+### Solution 2: list[ClaimDraft | object]
+
+优势：
+
+表面上同时包含 ClaimDraft schema 和 raw object 能力。
+
+问题：
+
+联合 schema 会退化为宽松 object 分支：
+
+- Provider 约束不可靠；
+- 合法 sibling 也不会稳定获得 ClaimDraft runtime 类型；
+- 仍需要 Host 二次 validation。
+
+当前不推荐。
+
+### Solution 3: SkipValidation[SerializeAsAny[ClaimDraft]]
+
+目标：
+
+同时满足：
+
+- Provider schema 暴露 ClaimDraft；
+- runtime 保留 raw sibling；
+- Host 继续拥有 validation ownership。
+
+该方向属于：
+
+minimal invasive fix。
+
+实施前需要验证：
+
+- generated JSON schema；
+- Structured Output provider compatibility；
+- runtime object behavior；
+- serializer behavior。
+
+### Solution 4: Custom Admission Layer（未来升级方向）
+
+未来更彻底的架构方向：
+
+LLM JSON output
+
+↓
+
+Custom Admission Layer
+
+↓
+
+ClaimDraft validation
+
+↓
+
+ClaimRecord materialization
+
+该方案进一步解耦：
+
+- Provider-facing generation schema；
+- Runtime admission；
+- Domain contract。
+
+优势：
+
+- 明确 LLM output 是 untrusted artifact；
+- 支持更细粒度 failure isolation；
+- 更符合复杂 Agent production system 的可靠性设计。
+
+但当前阶段不实施。
+
+原因：
+
+- S5 frozen semantics 已满足；
+- 当前问题属于 schema boundary 优化；
+- 引入 custom admission 会扩大修改范围。
+
+## Current Decision
+
+当前保持：
+
+ClaimDraft
+→ ClaimRecord
+
+领域边界不变。
+
+保持：
+
+ClaimDraftBatch sibling salvage 设计。
+
+Custom Admission Layer 记录为未来 architecture upgrade option，而不是当前 S5 implementation requirement。
+
+## Future Upgrade: Structured Research Coverage
+
+### 背景与动机
+
+P2-S5 的真实端到端运行暴露了 Evidence Grounding 与 research coverage 之间的语义缺口。
+
+当前 pipeline 已经能够清晰表达：
+
+Evidence
+
+↓
+
+Finding
+
+↓
+
+Claim
+
+↓
+
+Grounding
+
+↓
+
+Citation
+
+并能够区分 Claim 的以下 Grounding 状态：
+
+- supported；
+- contradicted；
+- insufficient；
+- unassessed。
+
+但当前架构尚未显式建模另一类独立情况：
+
+> 某个被要求研究的维度完全没有获得 admitted Evidence。
+
+在实际运行中，这类 coverage gap 曾被表达为：
+
+```text
+ResearchFinding(evidence_ids=[])
+```
+
+随后又可能被提升为 ordinary Claim。由于该 Claim 没有任何 Evidence 可供 Grounding，这会将“本次研究没有覆盖到某个维度”的过程事实错误地放入普通的 Claim → Grounding 路径。
+
+### 当前 S5 决定
+
+S5 的即时修复保持现有架构边界，不引入新的 structured coverage contract。
+
+当前采用以下规则：
+
+- 对外发布的 ordinary `ResearchFinding` 必须由 Evidence 支撑；
+- admitted ordinary Claim 必须能够解析到至少一个 candidate Evidence；
+- no-evidence 或 coverage-gap 信息继续保留在 task-level `limitations` 中；
+- `Grounding.INSUFFICIENT` 继续表示 Evidence 已存在，但在语义上不足以支持或反驳 Claim；
+- `Grounding.UNASSESSED` 继续表示异常的、不完整的 Grounding 状态，不作为正常 coverage-gap 表达方式。
+
+因此，当前 S5 明确保留以下语义边界：
+
+```text
+Evidence-backed proposition
+→ ordinary Finding
+→ Claim
+→ Grounding
+→ Citation
+
+No admitted Evidence / coverage gap
+→ task-level limitation
+```
+
+### 延期的架构升级
+
+未来的 reliability 或 evaluation 阶段可以引入独立的 structured research coverage path：
+
+```text
+EvidenceNeed
+→ Research execution
+→ Coverage result
+→ Evidence gap / limitation
+→ V2 report disclosure
+```
+
+该路径可以考虑引入以下结构化概念：
+
+- coverage status；
+- coverage dimension；
+- reason code；
+- 指向 `EvidenceNeed` 或 `ResearchTask` 的 provenance。
+
+结构化 coverage 应能够明确区分：
+
+- 已存在 Evidence，但对于某个 Claim 在语义上仍然不足；
+- 某个研究维度没有找到任何 admissible Evidence；
+- 某项研究尚未执行，或执行未完成；
+- runtime degradation 或其他执行故障导致无法判断 coverage。
+
+其中，第一种情况仍属于 Claim Grounding；其余情况属于 research coverage 或 execution limitation，不应进入 ordinary Claim ledger。
+
+### 架构约束
+
+未来的 coverage path 应始终与普通的 Claim → Grounding → Citation 主链分离。
+
+原因在于两条路径具有不同的语义对象和 provenance authority：
+
+```text
+Claim Grounding
+→ 判断 Evidence 对 reader-facing proposition 的支持关系
+
+Research Coverage
+→ 描述 EvidenceNeed / ResearchTask 是否得到充分执行与覆盖
+```
+
+Structured coverage 不应通过弱化 `Grounding.UNASSESSED`、放宽 ordinary Claim admission，或把无 Evidence 的过程陈述包装为普通 Claim 来实现。
+
+### 延期条件
+
+本升级当前仅作为 future architecture option 记录，不属于 P2-S5 implementation requirement。
+
+当以下任一需求出现时，再进入正式的 clarification、contract 与 implementation 流程：
+
+- V2 report 需要稳定、结构化地披露 research coverage；
+- evaluation 需要计算 coverage 维度或缺口指标；
+- reliability analysis 需要区分未检索到 Evidence、未执行研究和 runtime degradation；
+- `EvidenceNeed` / `ResearchTask` 级 provenance 需要进入可审计的 coverage result。
+
+在这些需求冻结之前，S5 继续通过 task-level `limitations` 承载 no-evidence coverage 信息，并保持 ordinary Claim 必须具备潜在可 Grounding 性。

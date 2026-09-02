@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import p2_s5_faithfulness_evaluator as evaluator_runtime
 import pytest
 from p2_s5_faithfulness_evaluator import (
     FaithfulnessDimension,
@@ -108,3 +109,51 @@ async def test_transient_retry_backoff_is_capped_and_bounded() -> None:
 def test_evaluator_is_not_a_runtime_state_or_manifest_field() -> None:
     assert "faithfulness_evaluation" not in AgentState.__annotations__
     assert callable(evaluate_faithfulness_live)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_name", "enable_thinking", "expected_model", "expected_extra_body"),
+    [
+        ("openai:test-model", False, "test-model", {"enable_thinking": False}),
+        ("test-model", True, "test-model", {"enable_thinking": True}),
+        ("openai:test-model", None, "test-model", None),
+    ],
+)
+async def test_live_evaluator_uses_explicit_runtime_fields(
+    monkeypatch,
+    model_name,
+    enable_thinking,
+    expected_model,
+    expected_extra_body,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeLiveModel:
+        def with_structured_output(self, schema):
+            captured["schema"] = schema
+            return self
+
+        async def ainvoke(self, _request):
+            return _evaluation()
+
+    def fake_chat_openai(**kwargs):
+        captured.update(kwargs)
+        return FakeLiveModel()
+
+    monkeypatch.setattr(evaluator_runtime, "ChatOpenAI", fake_chat_openai)
+    result = await evaluate_faithfulness_live(
+        _input(),
+        model_name=model_name,
+        enable_thinking=enable_thinking,
+        max_retries=0,
+    )
+
+    assert result.passed is True
+    assert captured["model"] == expected_model
+    assert captured["max_retries"] == 0
+    assert captured["schema"] is FaithfulnessEvaluation
+    if expected_extra_body is None:
+        assert "extra_body" not in captured
+    else:
+        assert captured["extra_body"] == expected_extra_body

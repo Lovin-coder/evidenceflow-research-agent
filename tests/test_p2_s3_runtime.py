@@ -193,19 +193,22 @@ async def test_write_research_brief_dual_writes_one_structured_source(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("thinking_policy", "expected_extra_body"),
+    ("global_policy", "role_policy", "expected_extra_body"),
     [
-        (None, None),
-        (False, {"enable_thinking": False}),
-        (True, {"enable_thinking": True}),
+        (None, None, None),
+        (False, None, {"enable_thinking": False}),
+        (False, True, {"enable_thinking": True}),
+        (True, False, {"enable_thinking": False}),
     ],
 )
 async def test_research_model_thinking_policy_reaches_model_boundary(
     monkeypatch,
-    thinking_policy: bool | None,
+    global_policy: bool | None,
+    role_policy: bool | None,
     expected_extra_body: dict[str, bool] | None,
 ) -> None:
-    """Forward only an explicit typed Thinking override to model construction."""
+    """Apply role-over-global precedence at the research model boundary."""
+    monkeypatch.delenv("MODEL_ENABLE_THINKING", raising=False)
     monkeypatch.delenv("RESEARCH_MODEL_ENABLE_THINKING", raising=False)
     brief = MedicalResearchBrief(
         normalized_question="Compare treatment A and treatment B in adults.",
@@ -224,7 +227,8 @@ async def test_research_model_thinking_policy_reaches_model_boundary(
             "configurable": {
                 "research_model": "openai:test-model",
                 "research_model_max_tokens": 321,
-                "research_model_enable_thinking": thinking_policy,
+                "model_enable_thinking": global_policy,
+                "research_model_enable_thinking": role_policy,
             }
         },
     )
@@ -239,10 +243,90 @@ async def test_research_model_thinking_policy_reaches_model_boundary(
 
 
 @pytest.mark.asyncio
+async def test_all_research_model_paths_share_effective_thinking_policy(
+    monkeypatch,
+) -> None:
+    """Keep clarification, brief, supervisor, and researcher on one role policy."""
+    monkeypatch.delenv("MODEL_ENABLE_THINKING", raising=False)
+    monkeypatch.delenv("RESEARCH_MODEL_ENABLE_THINKING", raising=False)
+    model_config = {
+        "configurable": {
+            "model_enable_thinking": False,
+            "research_model_enable_thinking": None,
+            "research_model": "openai:test-research",
+            "research_model_max_tokens": 456,
+        }
+    }
+
+    clarification_model = FakeModel(
+        runtime.ClarifyWithUser(
+            need_clarification=False,
+            question="",
+            verification="Proceeding.",
+        )
+    )
+    monkeypatch.setattr(runtime, "configurable_model", clarification_model)
+    await runtime.clarify_with_user(
+        {"messages": [HumanMessage(content="Research the question")]},
+        model_config,
+    )
+
+    brief_model = FakeModel(
+        MedicalResearchBrief(
+            normalized_question="Compare treatment A and treatment B in adults.",
+            question_type="treatment comparison",
+            clinical_elements=None,
+            constraints=[],
+            research_intent="Compare benefits and harms.",
+            evidence_needs=[need()],
+        )
+    )
+    monkeypatch.setattr(runtime, "configurable_model", brief_model)
+    await runtime.write_research_brief(
+        {"messages": [HumanMessage(content="Compare A and B")]},
+        model_config,
+    )
+
+    supervisor_model = FakeModel(AIMessage(content="Research complete"))
+    monkeypatch.setattr(runtime, "configurable_model", supervisor_model)
+    await runtime.supervisor(
+        {
+            "artifact_run_id": "research-policy-run",
+            "supervisor_messages": [HumanMessage(content="Research the question")],
+        },
+        model_config,
+    )
+
+    researcher_model = FakeModel(AIMessage(content="Evidence collected"))
+    monkeypatch.setattr(runtime, "configurable_model", researcher_model)
+    monkeypatch.setattr(runtime, "get_all_tools", local_researcher_tools)
+    await runtime.researcher(
+        {
+            "artifact_run_id": "research-policy-run",
+            "researcher_messages": [HumanMessage(content="Investigate treatment A")],
+        },
+        model_config,
+    )
+
+    for model in (
+        clarification_model,
+        brief_model,
+        supervisor_model,
+        researcher_model,
+    ):
+        assert model.bound_configs[-1]["configurable"] == {
+            "model": "openai:test-research",
+            "max_tokens": 456,
+            "extra_body": {"enable_thinking": False},
+        }
+
+
+@pytest.mark.asyncio
 async def test_arbitrary_extra_body_cannot_bypass_typed_configuration(
     monkeypatch,
 ) -> None:
     """Drop generic provider kwargs that are not production Configuration fields."""
+    monkeypatch.delenv("MODEL_ENABLE_THINKING", raising=False)
     monkeypatch.delenv("RESEARCH_MODEL_ENABLE_THINKING", raising=False)
     brief = MedicalResearchBrief(
         normalized_question="Compare treatment A and treatment B in adults.",

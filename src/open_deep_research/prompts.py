@@ -7,8 +7,31 @@ Each Claim must include its scope and qualifiers when material, and may referenc
 the task-qualified FindingRefs present in the input. Evidence excerpts are context for
 accurate scope and qualification; they are not output reference authority.
 
-Return Claim semantics and FindingRefs only. Do not create claim IDs, EvidenceRefs,
-Grounding judgments, Citations, hidden reasoning, or facts beyond the supplied input.
+Only evidence-backed Findings authorize ordinary Claims. Every referenced Finding must
+identify admitted Evidence, and the Claim's FindingRefs together must yield a non-empty
+candidate Evidence set. Task summaries, task limitations, execution errors or
+degradation, and no-evidence or coverage-gap statements are context only; they must not
+independently authorize an ordinary Claim. They may inform scope, qualifiers, or
+caution, but the Claim must still be supported by evidence-backed FindingRefs.
+Conflicts may likewise affect wording or qualifiers, but cannot bypass Finding and
+Evidence authority. Do not turn process-level statements such as "no Evidence was
+found" into ordinary factual Claims.
+
+Populate the structured ClaimDraftBatch output.
+
+Each item in `claims` must contain exactly these fields:
+
+- `text`: a non-empty factual claim proposition.
+- `materiality`: exactly one of `high`, `medium`, or `low`.
+- `finding_refs`: a non-empty list of objects containing `task_id` and `finding_id`.
+- `scope`: always include this field; use a string when applicable, otherwise use null.
+- `qualifiers`: always include this field; use a list of strings, or an empty list
+  when no qualifier applies.
+
+Do not emit `semantics` or any other extra field. Do not create claim IDs,
+EvidenceRefs, Grounding judgments, Citations, hidden reasoning, or facts beyond the
+supplied input. If no defensible claim can be grounded in the supplied findings,
+return an empty `claims` list.
 
 Bounded synthesis input:
 {projection}
@@ -32,6 +55,22 @@ paragraph must bind one or more eligible Claim IDs. Preserve each complete Claim
 scope and qualifiers, use only admitted supporting/conflicting Evidence, and discuss
 meaningful conflict explicitly. Do not output Citation identities or numbers, invent
 unavailable Sources, alter Evidence roles, or modify Grounding semantics.
+
+You are a renderer, not a new factual authority. Every factual or interpretive statement
+in the report body must be directly supported by the eligible grounded Claims provided
+to this stage. You may organize, compress, connect, and faithfully paraphrase eligible
+Claims, but must not introduce a new factual proposition or interpretation absent from
+those Claims. Do not add causal, biological, mechanistic, or statistical explanations;
+unsupported generalizations; new guideline recommendations; or new clinical
+interpretations. In particular, "no significant interaction" does not authorize a
+biological explanation, and a non-significant subgroup result does not authorize
+speculation about statistical power unless that explanation is itself present in an
+eligible Claim. Preserve Claim scope and qualifiers. If an explanation is plausible but
+not represented by an eligible Claim, omit it rather than completing it from general
+model knowledge.
+
+ResearchTaskResult limitations are Host-owned publication content. Do not invent,
+rewrite, summarize, translate, or add a limitation section.
 
 Bounded eligible Claim packages:
 {projection}
@@ -232,7 +271,7 @@ compress_research_system_prompt = """You are performing provenance-preserving se
 
 Return a concise task summary plus structured findings, task limitations, and material conflicts. Each finding must reference only Evidence IDs supplied in the authoritative Evidence projection. You may interpret and synthesize Evidence, but you must not create or alter Source records, Evidence records, excerpts, locators, hashes, artifact references, Source IDs, or Evidence IDs.
 
-Use the smallest relevant Evidence-ID set for each finding. Preserve important uncertainty and conflicting observations. If the available Evidence is insufficient for a useful conclusion, either return no finding or include the exact marker "evidence-insufficient" in a limitation for a finding without Evidence IDs.
+Each ResearchFinding is an Evidence-derived proposition and must reference at least one materialized, admitted Evidence ID. Use the smallest relevant Evidence-ID set for each finding and preserve important uncertainty and conflicting observations. If a research dimension has no usable or admitted Evidence, or only supports an evidence-insufficient or coverage-gap statement, do not create a ResearchFinding with an empty evidence_ids list. Record that bounded information in task-level limitations, including the exact marker "evidence-insufficient".
 
 The surrounding tool messages are process context. Only the explicitly labeled authoritative Evidence projection defines the Evidence records you may reference.
 """
