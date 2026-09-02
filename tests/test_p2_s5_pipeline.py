@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from threading import Thread, get_ident
 
 import pytest
 from test_p2_s5_projection import _brief, _result
@@ -113,6 +114,30 @@ def _raw_claim(text: str, *, materiality: str = "high") -> dict[str, object]:
     }
 
 
+async def _run_in_test_worker(function, *args, **kwargs):
+    """Run a synchronous factory in a worker that closes with the test."""
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(function(*args, **kwargs))
+        except BaseException as error:
+            errors.append(error)
+
+    worker = Thread(target=run)
+    worker.start()
+    worker.join()
+    if errors:
+        raise errors[0]
+    return results[0]
+
+
+@pytest.fixture(autouse=True)
+def _use_controlled_worker(monkeypatch) -> None:
+    monkeypatch.setattr(pipeline_runtime.asyncio, "to_thread", _run_in_test_worker)
+
+
 def test_claim_generation_prompt_matches_claim_draft_wire_contract() -> None:
     for field_name in (
         "text",
@@ -200,17 +225,46 @@ def test_configured_synthesis_models_preserve_role_mapping_and_policy(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_happy_path_publishes_manifest_then_report(tmp_path) -> None:
+async def test_pipeline_happy_path_publishes_manifest_then_report(
+    monkeypatch,
+    tmp_path,
+) -> None:
     models = _HappyModels()
+    event_loop_thread = get_ident()
+    factory_threads: list[int] = []
+    get_text_threads: list[int] = []
+    store = LocalFileArtifactStore(tmp_path, "pipeline-run")
+    original_get_text = store.get_text
+
+    def recording_get_text(artifact_ref):
+        get_text_threads.append(get_ident())
+        return original_get_text(artifact_ref)
+
+    def fake_artifact_store_from_config(_config, artifact_run_id):
+        factory_threads.append(get_ident())
+        assert artifact_run_id == "pipeline-run"
+        return store
+
+    monkeypatch.setattr(
+        pipeline_runtime,
+        "artifact_store_from_config",
+        fake_artifact_store_from_config,
+    )
+    monkeypatch.setattr(store, "get_text", recording_get_text)
+
     outcome = await run_global_synthesis(
         medical_research_brief=_brief(),
         research_results=[_result("task-1")],
         artifact_run_id="pipeline-run",
         config={"configurable": {"max_structured_output_retries": 0}},
-        artifact_store=LocalFileArtifactStore(tmp_path, "pipeline-run"),
         models=models.bundle(),
     )
 
+    assert len(factory_threads) == 1
+    assert factory_threads[0] != event_loop_thread
+    assert get_text_threads and all(
+        thread_id != event_loop_thread for thread_id in get_text_threads
+    )
     assert outcome.status is GlobalSynthesisStatus.SUCCESS
     assert outcome.manifest is not None
     assert len(outcome.manifest.claims) == 1

@@ -1,6 +1,7 @@
 """Deterministic integration coverage for the complete P2-S4 runtime path."""
 
 import importlib
+from threading import Thread, get_ident
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -30,6 +31,30 @@ from open_deep_research.utils import (
 )
 
 runtime = importlib.import_module("open_deep_research.deep_researcher")
+
+
+async def _run_in_test_worker(function, *args, **kwargs):
+    """Run synchronous Store work in a worker that closes with the test."""
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(function(*args, **kwargs))
+        except BaseException as error:
+            errors.append(error)
+
+    worker = Thread(target=run)
+    worker.start()
+    worker.join()
+    if errors:
+        raise errors[0]
+    return results[0]
+
+
+@pytest.fixture(autouse=True)
+def _use_controlled_worker(monkeypatch) -> None:
+    monkeypatch.setattr(runtime.asyncio, "to_thread", _run_in_test_worker)
 
 
 class SelectingModel:
@@ -343,6 +368,22 @@ async def test_deterministic_complete_s4_path_crosses_both_agent_boundaries(
             "compression_model_enable_thinking": True,
         }
     }
+    event_loop_thread = get_ident()
+    get_text_threads: list[int] = []
+    factory_threads: list[int] = []
+    original_get_text = LocalFileArtifactStore.get_text
+    original_factory = runtime.artifact_store_from_config
+
+    def recording_get_text(store, artifact_ref):
+        get_text_threads.append(get_ident())
+        return original_get_text(store, artifact_ref)
+
+    def recording_factory(config, artifact_run_id):
+        factory_threads.append(get_ident())
+        return original_factory(config, artifact_run_id)
+
+    monkeypatch.setattr(LocalFileArtifactStore, "get_text", recording_get_text)
+    monkeypatch.setattr(runtime, "artifact_store_from_config", recording_factory)
     store = LocalFileArtifactStore(tmp_path, "integration-run")
     search_result = await execute_tavily_search_structured(
         ["treatment guideline benefits harms"],
@@ -442,7 +483,13 @@ async def test_deterministic_complete_s4_path_crosses_both_agent_boundaries(
 
     source = result.source_records[0]
     evidence = result.evidence_records[0]
-    artifact = store.get_text(source.artifact_ref)
+    assert factory_threads and all(
+        thread_id != event_loop_thread for thread_id in factory_threads
+    )
+    assert get_text_threads and all(
+        thread_id != event_loop_thread for thread_id in get_text_threads
+    )
+    artifact = original_get_text(store, source.artifact_ref)
     start, end = parse_locator(evidence.locator)
     assert artifact[start:end] == evidence.excerpt
 
@@ -526,6 +573,71 @@ async def test_structured_issue_degrades_status_when_tool_message_omits_warning(
     )
 
     assert compressed["research_task_result"].status is ResearchTaskStatus.PARTIAL
+
+
+@pytest.mark.asyncio
+async def test_tavily_failure_logs_traceback_without_exposing_domain_payload(
+    monkeypatch,
+    caplog,
+) -> None:
+    async def failing_search(**_kwargs):
+        raise RuntimeError("SECRET_PROVIDER_PAYLOAD")
+
+    async def fixed_tools(_config):
+        return [NamedTool("tavily_search")]
+
+    monkeypatch.setattr(runtime, "execute_tavily_search_structured", failing_search)
+    monkeypatch.setattr(runtime, "get_all_tools", fixed_tools)
+    caplog.set_level("ERROR", logger=runtime.__name__)
+
+    command = await runtime.researcher_tools(
+        {
+            "task": task(),
+            "research_topic": runtime.render_medical_research_task(task()),
+            "researcher_messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "tavily_search",
+                            "id": "failed-search",
+                            "args": {"queries": ["bounded query"]},
+                        }
+                    ],
+                )
+            ],
+            "tool_call_iterations": 1,
+            "source_records": [],
+            "evidence_records": [],
+            "findings": [],
+            "execution_issues": [],
+            "execution_failure_observed": False,
+        },
+        {
+            "configurable": {
+                "search_api": "tavily",
+                "max_react_tool_calls": 1,
+            }
+        },
+    )
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Tavily execution failed"
+    ]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is RuntimeError
+    assert command.update["source_records"] == []
+    assert command.update["evidence_records"] == []
+    issue = command.update["execution_issues"][0]
+    assert issue.code == "tavily_execution_failed"
+    assert issue.message == "Tavily execution failed with RuntimeError."
+    assert "SECRET_PROVIDER_PAYLOAD" not in issue.message
+    assert "SECRET_PROVIDER_PAYLOAD" not in command.update[
+        "researcher_messages"
+    ][0].content
 
 
 @pytest.mark.asyncio

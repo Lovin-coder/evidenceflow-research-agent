@@ -379,7 +379,14 @@ async def run_global_synthesis(
             None, None, GlobalSynthesisStatus.FAILED, issues, None
         )
 
-    store = artifact_store or artifact_store_from_config(config, artifact_run_id)
+    if artifact_store is not None:
+        store = artifact_store
+    else:
+        store = await asyncio.to_thread(
+            artifact_store_from_config,
+            config,
+            artifact_run_id,
+        )
     configurable = Configuration.from_runnable_config(config)
     execution = GlobalSynthesisExecutionContext(
         artifact_run_id=artifact_run_id,
@@ -532,7 +539,8 @@ async def run_global_synthesis(
 
     metrics = derive_grounding_metrics(manifest)
     try:
-        display_entries = build_source_display_entries(
+        display_entries = await asyncio.to_thread(
+            build_source_display_entries,
             manifest.citations,
             resolver=resolver,
             artifact_run_id=artifact_run_id,

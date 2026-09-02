@@ -67,11 +67,13 @@ async def test_parent_node_applies_one_bounded_update_without_erasing_v1_inputs(
 @pytest.mark.asyncio
 async def test_unexpected_v2_failure_is_contained_and_v1_inputs_survive(
     monkeypatch,
+    caplog,
 ) -> None:
     async def fail(**_kwargs):
-        raise RuntimeError("unexpected")
+        raise RuntimeError("SECRET_SYNTHESIS_PAYLOAD")
 
     monkeypatch.setattr(runtime, "run_global_synthesis", fail)
+    caplog.set_level("ERROR", logger=runtime.__name__)
     state = {
         "messages": [HumanMessage(content="question")],
         "research_results": [],
@@ -81,8 +83,21 @@ async def test_unexpected_v2_failure_is_contained_and_v1_inputs_survive(
     }
     update = await runtime.global_synthesis(state, {})
 
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Global Synthesis boundary failed"
+    ]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is RuntimeError
     assert update["global_synthesis_status"] is GlobalSynthesisStatus.FAILED
     assert "grounding_manifest" not in update
+    issue = update["global_synthesis_issues"][0]
+    assert issue.stage == "publication_gate"
+    assert issue.code == "GLOBAL_SYNTHESIS_BOUNDARY_FAILURE"
+    assert issue.message == "Global Synthesis boundary failed: RuntimeError."
+    assert "SECRET_SYNTHESIS_PAYLOAD" not in issue.message
     assert state["raw_notes"] == ["raw preserved"]
     assert state["notes"] == ["note preserved"]
 

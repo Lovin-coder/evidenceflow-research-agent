@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote
@@ -96,6 +97,8 @@ from open_deep_research.utils import (
     remove_up_to_last_ai_message,
     think_tool,
 )
+
+logger = logging.getLogger(__name__)
 
 # Initialize a configurable model that we will use throughout the agent
 configurable_model = init_chat_model(
@@ -722,7 +725,8 @@ async def _invoke_research_task(
         result = ResearchTaskResult.model_validate(observation["research_task_result"])
         if result.task_id != task.task_id:
             raise ValueError("Researcher returned a result for a different task_id")
-        _validate_research_result_for_publish(
+        await asyncio.to_thread(
+            _validate_research_result_for_publish,
             task,
             result,
             config=config,
@@ -1277,6 +1281,7 @@ async def _execute_researcher_tool(
             tool_call_id=tool_call["id"],
         )
     except Exception as error:
+        logger.exception("Tavily execution failed")
         issue = make_research_execution_issue(
             stage=ResearchExecutionStage.TOOL_EXECUTION,
             code="tavily_execution_failed",
@@ -1720,7 +1725,8 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
     evidence_records = list(state.get("evidence_records", []))
 
     # Gate invalid local provenance before it can enter semantic compression.
-    _build_and_publish_research_result(
+    await asyncio.to_thread(
+        _build_and_publish_research_result,
         task=task,
         config=config,
         artifact_run_id=artifact_run_id,
@@ -1801,7 +1807,8 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
                 )
             conflicts = list(compression.conflicts)
             conflicts.extend(conflict for finding in findings for conflict in finding.conflicts)
-            result = _build_and_publish_research_result(
+            result = await asyncio.to_thread(
+                _build_and_publish_research_result,
                 task=task,
                 config=config,
                 artifact_run_id=artifact_run_id,
@@ -1840,16 +1847,18 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
         )
     )
     compression_error = f"{last_compression_failure}: maximum retries exceeded"
+    failed_result = await asyncio.to_thread(
+        _failed_research_result,
+        task,
+        compression_error,
+        source_records=source_records,
+        evidence_records=evidence_records,
+        findings=state.get("findings", []),
+        config=config,
+        artifact_run_id=artifact_run_id,
+    )
     return {
-        "research_task_result": _failed_research_result(
-            task,
-            compression_error,
-            source_records=source_records,
-            evidence_records=evidence_records,
-            findings=state.get("findings", []),
-            config=config,
-            artifact_run_id=artifact_run_id,
-        ),
+        "research_task_result": failed_result,
         "compressed_research": "Error synthesizing research report: Maximum retries exceeded",
         "raw_notes": [raw_notes_content],
     }
@@ -1992,6 +2001,7 @@ async def global_synthesis(
             existing_issues=existing_issues,
         )
     except Exception as error:
+        logger.exception("Global Synthesis boundary failed")
         outcome = _contained_pipeline_failure(
             error=error,
             existing_manifest=existing_manifest,

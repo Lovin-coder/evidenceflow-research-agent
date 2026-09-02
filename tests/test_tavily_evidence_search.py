@@ -1,6 +1,7 @@
 """Regression tests for P2-S4 structured Tavily execution."""
 
 from datetime import datetime
+from threading import Thread, get_ident
 
 import pytest
 
@@ -69,6 +70,62 @@ class TwoCandidateModel(SelectingModel):
         )
 
 
+class _MemoryArtifactStore:
+    """Minimal Store double for default-construction scheduling coverage."""
+
+    def __init__(self) -> None:
+        self._texts: dict[str, str] = {}
+
+    def put_text(self, text: str) -> str:
+        artifact_ref = f"artifact:sha256:{len(self._texts) + 1:064x}"
+        self._texts[artifact_ref] = text
+        return artifact_ref
+
+    def get_text(self, artifact_ref: str) -> str:
+        return self._texts[artifact_ref]
+
+
+class _ThreadRecordingArtifactStore:
+    """Record production Store I/O threads while preserving local persistence."""
+
+    def __init__(self, root, run_id: str) -> None:
+        self.delegate = LocalFileArtifactStore(root, run_id)
+        self.put_threads: list[int] = []
+        self.get_threads: list[int] = []
+
+    def put_text(self, text: str) -> str:
+        self.put_threads.append(get_ident())
+        return self.delegate.put_text(text)
+
+    def get_text(self, artifact_ref: str) -> str:
+        self.get_threads.append(get_ident())
+        return self.delegate.get_text(artifact_ref)
+
+
+async def _run_in_test_worker(function, *args, **kwargs):
+    """Run a synchronous factory in a worker that closes with the test."""
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            results.append(function(*args, **kwargs))
+        except BaseException as error:
+            errors.append(error)
+
+    worker = Thread(target=run)
+    worker.start()
+    worker.join()
+    if errors:
+        raise errors[0]
+    return results[0]
+
+
+@pytest.fixture(autouse=True)
+def _use_controlled_worker(monkeypatch) -> None:
+    monkeypatch.setattr(search_runtime.asyncio, "to_thread", _run_in_test_worker)
+
+
 def provider_response() -> dict:
     """Return one usable deterministic Tavily-like fixture."""
     return {
@@ -127,7 +184,8 @@ async def test_summarization_model_uses_role_thinking_policy(
 @pytest.mark.asyncio
 async def test_structured_tavily_builds_dual_channel_exact_provenance(tmp_path) -> None:
     """Prove usable raw content becomes structured data plus bounded observation."""
-    store = LocalFileArtifactStore(tmp_path, "run-one")
+    event_loop_thread = get_ident()
+    store = _ThreadRecordingArtifactStore(tmp_path, "run-one")
 
     result = await execute_tavily_search_structured(
         ["treatment effectiveness"],
@@ -141,7 +199,13 @@ async def test_structured_tavily_builds_dual_channel_exact_provenance(tmp_path) 
     assert len(result.sources) == len(result.evidences) == 1
     source = result.sources[0]
     evidence = result.evidences[0]
-    artifact = store.get_text(source.artifact_ref)
+    assert store.put_threads and all(
+        thread_id != event_loop_thread for thread_id in store.put_threads
+    )
+    assert store.get_threads and all(
+        thread_id != event_loop_thread for thread_id in store.get_threads
+    )
+    artifact = store.delegate.get_text(source.artifact_ref)
     start, end = parse_locator(evidence.locator)
     assert artifact[start:end] == evidence.excerpt
     assert evidence.source_id == source.source_id
@@ -163,6 +227,64 @@ async def test_structured_tavily_builds_dual_channel_exact_provenance(tmp_path) 
         "retrieved_at",
         "published_at",
     }
+
+
+@pytest.mark.asyncio
+async def test_structured_tavily_constructs_default_store_off_event_loop(
+    monkeypatch,
+) -> None:
+    """Keep synchronous local Store setup outside async orchestration."""
+    event_loop_thread = get_ident()
+    factory_threads: list[int] = []
+
+    def fake_artifact_store_from_config(_config, artifact_run_id):
+        factory_threads.append(get_ident())
+        assert artifact_run_id == "default-store-run"
+        return _MemoryArtifactStore()
+
+    monkeypatch.setattr(
+        search_runtime,
+        "artifact_store_from_config",
+        fake_artifact_store_from_config,
+    )
+    result = await execute_tavily_search_structured(
+        ["treatment effectiveness"],
+        config={"configurable": {"max_search_tool_message_chars": 4_000}},
+        provider_responses=[provider_response()],
+        selection_model=SelectingModel(),
+        artifact_run_id="default-store-run",
+    )
+
+    assert len(factory_threads) == 1
+    assert factory_threads[0] != event_loop_thread
+    assert len(result.sources) == len(result.evidences) == 1
+
+
+@pytest.mark.asyncio
+async def test_structured_tavily_reuses_explicit_store_without_factory(
+    monkeypatch,
+) -> None:
+    """Injected Stores retain their direct execution path."""
+    store = _MemoryArtifactStore()
+
+    def unexpected_factory(_config, _artifact_run_id):
+        raise AssertionError("explicit artifact_store must bypass factory")
+
+    monkeypatch.setattr(
+        search_runtime,
+        "artifact_store_from_config",
+        unexpected_factory,
+    )
+
+    result = await execute_tavily_search_structured(
+        ["treatment effectiveness"],
+        config={"configurable": {"max_search_tool_message_chars": 4_000}},
+        provider_responses=[provider_response()],
+        selection_model=SelectingModel(),
+        artifact_store=store,
+    )
+
+    assert len(result.sources) == len(result.evidences) == 1
 
 
 @pytest.mark.asyncio
@@ -252,6 +374,57 @@ async def test_selector_failure_preserves_source_and_successful_sibling(tmp_path
     assert result.evidences[0].source_id == result.sources[0].source_id
     assert any("accepted Source was preserved" in item for item in result.warnings)
     assert "Evidence selection was unavailable" in result.model_content
+
+
+@pytest.mark.asyncio
+async def test_result_ingestion_failure_logs_traceback_without_exposing_payload(
+    monkeypatch,
+    caplog,
+    tmp_path,
+) -> None:
+    """Retain per-result traceback only in server-side diagnostic logging."""
+    original_put_text = LocalFileArtifactStore.put_text
+    put_text_calls = 0
+
+    def fail_first_put_text(store, text):
+        nonlocal put_text_calls
+        put_text_calls += 1
+        if put_text_calls == 1:
+            raise RuntimeError("SECRET_INGESTION_PAYLOAD")
+        return original_put_text(store, text)
+
+    monkeypatch.setattr(LocalFileArtifactStore, "put_text", fail_first_put_text)
+    caplog.set_level("ERROR", logger=search_runtime.__name__)
+    first = provider_response()["results"][0]
+    second = {
+        **first,
+        "title": "Accepted sibling",
+        "url": "https://example.test/accepted-sibling",
+    }
+
+    result = await execute_tavily_search_structured(
+        ["per-result isolation"],
+        provider_responses=[{"query": "per-result isolation", "results": [first, second]}],
+        selection_model=SelectingModel(),
+        artifact_store=LocalFileArtifactStore(tmp_path, "run-one"),
+    )
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Tavily result ingestion failed"
+    ]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is RuntimeError
+    assert records[0].exc_info[2] is not None
+    assert len(result.sources) == len(result.evidences) == 1
+    issue = next(item for item in result.issues if item.code == "result_ingestion_failed")
+    assert issue.message == "Tavily result 1 failed ingestion with RuntimeError."
+    assert issue.message in result.warnings
+    assert "SECRET_INGESTION_PAYLOAD" not in issue.message
+    assert "SECRET_INGESTION_PAYLOAD" not in result.warnings
+    assert "SECRET_INGESTION_PAYLOAD" not in result.model_content
 
 
 @pytest.mark.asyncio
