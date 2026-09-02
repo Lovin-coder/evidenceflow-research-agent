@@ -7,6 +7,16 @@ Each Claim must include its scope and qualifiers when material, and may referenc
 the task-qualified FindingRefs present in the input. Evidence excerpts are context for
 accurate scope and qualification; they are not output reference authority.
 
+Only evidence-backed Findings authorize ordinary Claims. Every referenced Finding must
+identify admitted Evidence, and the Claim's FindingRefs together must yield a non-empty
+candidate Evidence set. Task summaries, task limitations, execution errors or
+degradation, and no-evidence or coverage-gap statements are context only; they must not
+independently authorize an ordinary Claim. They may inform scope, qualifiers, or
+caution, but the Claim must still be supported by evidence-backed FindingRefs.
+Conflicts may likewise affect wording or qualifiers, but cannot bypass Finding and
+Evidence authority. Do not turn process-level statements such as "no Evidence was
+found" into ordinary factual Claims.
+
 Populate the structured ClaimDraftBatch output.
 
 Each item in `claims` must contain exactly these fields:
@@ -245,7 +255,7 @@ compress_research_system_prompt = """You are performing provenance-preserving se
 
 Return a concise task summary plus structured findings, task limitations, and material conflicts. Each finding must reference only Evidence IDs supplied in the authoritative Evidence projection. You may interpret and synthesize Evidence, but you must not create or alter Source records, Evidence records, excerpts, locators, hashes, artifact references, Source IDs, or Evidence IDs.
 
-Use the smallest relevant Evidence-ID set for each finding. Preserve important uncertainty and conflicting observations. If the available Evidence is insufficient for a useful conclusion, either return no finding or include the exact marker "evidence-insufficient" in a limitation for a finding without Evidence IDs.
+Each ResearchFinding is an Evidence-derived proposition and must reference at least one materialized, admitted Evidence ID. Use the smallest relevant Evidence-ID set for each finding and preserve important uncertainty and conflicting observations. If a research dimension has no usable or admitted Evidence, or only supports an evidence-insufficient or coverage-gap statement, do not create a ResearchFinding with an empty evidence_ids list. Record that bounded information in task-level limitations, including the exact marker "evidence-insufficient".
 
 The surrounding tool messages are process context. Only the explicitly labeled authoritative Evidence projection defines the Evidence records you may reference.
 """

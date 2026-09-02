@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
-from open_deep_research.domain_models import ClaimMateriality, ClaimRecord, FindingRef
+from open_deep_research.domain_models import (
+    ClaimMateriality,
+    ClaimRecord,
+    EvidenceRef,
+    FindingRef,
+)
 from open_deep_research.global_synthesis.projection import (
     GeneratorProjection,
     TaskQualifiedResolver,
@@ -40,6 +45,7 @@ _SAFE_HOST_VALIDATION_MESSAGES = frozenset(
         "Claim FindingRef count exceeds capacity",
         "Claim FindingRefs must be unique",
         "Claim FindingRef was not visible to Model A",
+        "Claim FindingRefs resolve no candidate Evidence",
     }
 )
 
@@ -133,10 +139,18 @@ def _validate_claim_sibling(
     coordinates = [(ref.task_id, ref.finding_id) for ref in draft.finding_refs]
     if len(coordinates) != len(set(coordinates)):
         raise ValueError("Claim FindingRefs must be unique")
+    candidate_evidence_found = False
     for ref, coordinate in zip(draft.finding_refs, coordinates, strict=True):
-        resolver.resolve_finding(ref)
+        finding = resolver.resolve_finding(ref)
         if coordinate not in visible_refs:
             raise ValueError("Claim FindingRef was not visible to Model A")
+        for evidence_id in finding.evidence_ids:
+            resolver.resolve_evidence(
+                EvidenceRef(task_id=ref.task_id, evidence_id=evidence_id)
+            )
+            candidate_evidence_found = True
+    if not candidate_evidence_found:
+        raise ValueError("Claim FindingRefs resolve no candidate Evidence")
     return _canonical_claim_payload(draft)
 
 

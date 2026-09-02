@@ -10,7 +10,11 @@ import pytest
 from test_p2_s5_projection import _brief, _result
 
 from open_deep_research.artifact_store import LocalFileArtifactStore
-from open_deep_research.domain_models import ClaimMateriality, FindingRef
+from open_deep_research.domain_models import (
+    ClaimMateriality,
+    FindingRef,
+    ResearchFinding,
+)
 from open_deep_research.global_synthesis.claims import (
     _invalid_sibling_diagnostic,
     _invoke_claim_generator,
@@ -133,6 +137,60 @@ def test_invalid_sibling_is_dropped_without_losing_valid_sibling(tmp_path) -> No
     assert [claim.text for claim in outcome.claims] == ["Valid claim"]
     assert outcome.invalid_sibling_count == 1
     assert outcome.degradation_observed is True
+
+
+def test_zero_evidence_claim_is_dropped_without_losing_valid_siblings(tmp_path) -> None:
+    result = _result("task-1")
+    zero_evidence_finding = ResearchFinding(
+        finding_id="coverage-gap",
+        task_id="task-1",
+        text="No admitted Evidence addressed this dimension.",
+        evidence_ids=[],
+        limitations=["evidence-insufficient"],
+        conflicts=[],
+    )
+    result = result.model_copy(
+        update={"findings": [*result.findings, zero_evidence_finding]}
+    )
+    resolver = TaskQualifiedResolver(
+        [result], LocalFileArtifactStore(tmp_path, "zero-evidence-claim-run")
+    )
+    batch = ClaimDraftBatch(
+        claims=[
+            _raw_draft("Valid claim A"),
+            _raw_draft(
+                "SECRET_ZERO_EVIDENCE_CLAIM_PAYLOAD",
+                finding_id="coverage-gap",
+            ),
+            _raw_draft("Valid claim B"),
+        ]
+    )
+
+    outcome = _materialize_claims(
+        batch,
+        resolver=resolver,
+        generator_visible_finding_refs=[
+            FindingRef(task_id="task-1", finding_id="shared-finding"),
+            FindingRef(task_id="task-1", finding_id="coverage-gap"),
+        ],
+        limits=GlobalSynthesisLimits(),
+    )
+
+    assert [claim.text for claim in outcome.claims] == [
+        "Valid claim A",
+        "Valid claim B",
+    ]
+    assert [receipt.original_generator_ordinal for receipt in outcome.receipts] == [
+        0,
+        2,
+    ]
+    assert outcome.invalid_sibling_count == 1
+    assert "Claim FindingRefs resolve no candidate Evidence" in (
+        outcome.invalid_sibling_diagnostics[0]
+    )
+    assert "SECRET_ZERO_EVIDENCE_CLAIM_PAYLOAD" not in (
+        outcome.invalid_sibling_diagnostics[0]
+    )
 
 
 def test_exact_duplicate_only_and_near_duplicate_survives(tmp_path) -> None:

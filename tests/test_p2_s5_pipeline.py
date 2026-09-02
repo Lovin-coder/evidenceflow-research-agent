@@ -16,6 +16,7 @@ from open_deep_research.domain_models import (
     EvidenceRef,
     FindingRef,
     GroundingManifest,
+    ResearchFinding,
 )
 from open_deep_research.global_synthesis.pipeline import (
     _configured_synthesis_models,
@@ -102,12 +103,17 @@ class _RawClaimModels(_HappyModels):
         return {"claims": self.claims}
 
 
-def _raw_claim(text: str, *, materiality: str = "high") -> dict[str, object]:
+def _raw_claim(
+    text: str,
+    *,
+    materiality: str = "high",
+    finding_id: str = "shared-finding",
+) -> dict[str, object]:
     return {
         "text": text,
         "materiality": materiality,
         "finding_refs": [
-            {"task_id": "task-1", "finding_id": "shared-finding"}
+            {"task_id": "task-1", "finding_id": finding_id}
         ],
         "scope": None,
         "qualifiers": [],
@@ -139,6 +145,7 @@ def _use_controlled_worker(monkeypatch) -> None:
 
 
 def test_claim_generation_prompt_matches_claim_draft_wire_contract() -> None:
+    normalized_prompt = " ".join(CLAIM_GENERATION_PROMPT.split())
     for field_name in (
         "text",
         "materiality",
@@ -154,6 +161,15 @@ def test_claim_generation_prompt_matches_claim_draft_wire_contract() -> None:
     assert "when no qualifier applies" in CLAIM_GENERATION_PROMPT
     assert "Do not emit `semantics` or any other extra field" in CLAIM_GENERATION_PROMPT
     assert "return an empty `claims` list" in CLAIM_GENERATION_PROMPT
+    assert "Only evidence-backed Findings authorize ordinary Claims" in (
+        CLAIM_GENERATION_PROMPT
+    )
+    assert "must yield a non-empty candidate Evidence set" in normalized_prompt
+    assert "must not independently authorize an ordinary Claim" in normalized_prompt
+    assert 'process-level statements such as "no Evidence was found"' in normalized_prompt
+    assert "Conflicts may likewise affect wording or qualifiers" in (
+        CLAIM_GENERATION_PROMPT
+    )
     assert "Return Claim semantics and FindingRefs only" not in CLAIM_GENERATION_PROMPT
 
 
@@ -270,6 +286,60 @@ async def test_pipeline_happy_path_publishes_manifest_then_report(
     assert len(outcome.manifest.claims) == 1
     assert len(outcome.manifest.citations) == 1
     assert outcome.shadow_report is not None
+    assert models.calls == {"a": 1, "b": 1, "c": 1}
+
+
+@pytest.mark.asyncio
+async def test_zero_evidence_claim_is_omitted_before_grounding(tmp_path) -> None:
+    result = _result("task-1")
+    result = result.model_copy(
+        update={
+            "findings": [
+                *result.findings,
+                ResearchFinding(
+                    finding_id="coverage-gap",
+                    task_id="task-1",
+                    text="No admitted Evidence addressed this dimension.",
+                    evidence_ids=[],
+                    limitations=["evidence-insufficient"],
+                    conflicts=[],
+                ),
+            ]
+        }
+    )
+    models = _RawClaimModels(
+        [
+            _raw_claim("Treatment improves outcomes."),
+            _raw_claim(
+                "No Evidence was found for another dimension.",
+                finding_id="coverage-gap",
+            ),
+        ]
+    )
+
+    outcome = await run_global_synthesis(
+        medical_research_brief=_brief(),
+        research_results=[result],
+        artifact_run_id="zero-evidence-claim-run",
+        config={"configurable": {"max_structured_output_retries": 0}},
+        artifact_store=LocalFileArtifactStore(tmp_path, "zero-evidence-claim-run"),
+        models=models.bundle(),
+    )
+
+    assert outcome.status is GlobalSynthesisStatus.PARTIAL
+    assert outcome.manifest is not None
+    assert [claim.text for claim in outcome.manifest.claims] == [
+        "Treatment improves outcomes."
+    ]
+    assert len(outcome.manifest.groundings) == 1
+    assert not any(
+        issue.code == "GROUNDING_UNASSESSED" for issue in outcome.issues
+    )
+    omission = next(
+        issue for issue in outcome.issues if issue.code == "CLAIM_SIBLING_OMISSION"
+    )
+    assert "invalid=1, duplicate=0, capacity=0" in omission.message
+    assert "Claim FindingRefs resolve no candidate Evidence" in omission.message
     assert models.calls == {"a": 1, "b": 1, "c": 1}
 
 

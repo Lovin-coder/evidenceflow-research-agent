@@ -478,3 +478,130 @@ ClaimDraft
 ClaimDraftBatch sibling salvage 设计。
 
 Custom Admission Layer 记录为未来 architecture upgrade option，而不是当前 S5 implementation requirement。
+
+## Future Upgrade: Structured Research Coverage
+
+### 背景与动机
+
+P2-S5 的真实端到端运行暴露了 Evidence Grounding 与 research coverage 之间的语义缺口。
+
+当前 pipeline 已经能够清晰表达：
+
+Evidence
+
+↓
+
+Finding
+
+↓
+
+Claim
+
+↓
+
+Grounding
+
+↓
+
+Citation
+
+并能够区分 Claim 的以下 Grounding 状态：
+
+- supported；
+- contradicted；
+- insufficient；
+- unassessed。
+
+但当前架构尚未显式建模另一类独立情况：
+
+> 某个被要求研究的维度完全没有获得 admitted Evidence。
+
+在实际运行中，这类 coverage gap 曾被表达为：
+
+```text
+ResearchFinding(evidence_ids=[])
+```
+
+随后又可能被提升为 ordinary Claim。由于该 Claim 没有任何 Evidence 可供 Grounding，这会将“本次研究没有覆盖到某个维度”的过程事实错误地放入普通的 Claim → Grounding 路径。
+
+### 当前 S5 决定
+
+S5 的即时修复保持现有架构边界，不引入新的 structured coverage contract。
+
+当前采用以下规则：
+
+- 对外发布的 ordinary `ResearchFinding` 必须由 Evidence 支撑；
+- admitted ordinary Claim 必须能够解析到至少一个 candidate Evidence；
+- no-evidence 或 coverage-gap 信息继续保留在 task-level `limitations` 中；
+- `Grounding.INSUFFICIENT` 继续表示 Evidence 已存在，但在语义上不足以支持或反驳 Claim；
+- `Grounding.UNASSESSED` 继续表示异常的、不完整的 Grounding 状态，不作为正常 coverage-gap 表达方式。
+
+因此，当前 S5 明确保留以下语义边界：
+
+```text
+Evidence-backed proposition
+→ ordinary Finding
+→ Claim
+→ Grounding
+→ Citation
+
+No admitted Evidence / coverage gap
+→ task-level limitation
+```
+
+### 延期的架构升级
+
+未来的 reliability 或 evaluation 阶段可以引入独立的 structured research coverage path：
+
+```text
+EvidenceNeed
+→ Research execution
+→ Coverage result
+→ Evidence gap / limitation
+→ V2 report disclosure
+```
+
+该路径可以考虑引入以下结构化概念：
+
+- coverage status；
+- coverage dimension；
+- reason code；
+- 指向 `EvidenceNeed` 或 `ResearchTask` 的 provenance。
+
+结构化 coverage 应能够明确区分：
+
+- 已存在 Evidence，但对于某个 Claim 在语义上仍然不足；
+- 某个研究维度没有找到任何 admissible Evidence；
+- 某项研究尚未执行，或执行未完成；
+- runtime degradation 或其他执行故障导致无法判断 coverage。
+
+其中，第一种情况仍属于 Claim Grounding；其余情况属于 research coverage 或 execution limitation，不应进入 ordinary Claim ledger。
+
+### 架构约束
+
+未来的 coverage path 应始终与普通的 Claim → Grounding → Citation 主链分离。
+
+原因在于两条路径具有不同的语义对象和 provenance authority：
+
+```text
+Claim Grounding
+→ 判断 Evidence 对 reader-facing proposition 的支持关系
+
+Research Coverage
+→ 描述 EvidenceNeed / ResearchTask 是否得到充分执行与覆盖
+```
+
+Structured coverage 不应通过弱化 `Grounding.UNASSESSED`、放宽 ordinary Claim admission，或把无 Evidence 的过程陈述包装为普通 Claim 来实现。
+
+### 延期条件
+
+本升级当前仅作为 future architecture option 记录，不属于 P2-S5 implementation requirement。
+
+当以下任一需求出现时，再进入正式的 clarification、contract 与 implementation 流程：
+
+- V2 report 需要稳定、结构化地披露 research coverage；
+- evaluation 需要计算 coverage 维度或缺口指标；
+- reliability analysis 需要区分未检索到 Evidence、未执行研究和 runtime degradation；
+- `EvidenceNeed` / `ResearchTask` 级 provenance 需要进入可审计的 coverage result。
+
+在这些需求冻结之前，S5 继续通过 task-level `limitations` 承载 no-evidence coverage 信息，并保持 ordinary Claim 必须具备潜在可 Grounding 性。

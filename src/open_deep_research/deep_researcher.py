@@ -31,6 +31,7 @@ from open_deep_research.configuration import (
     Configuration,
 )
 from open_deep_research.domain_models import (
+    EVIDENCE_INSUFFICIENT_MARKER,
     MAX_RESULT_EVIDENCE_CHARS,
     MAX_RESULT_EVIDENCE_RECORDS,
     MAX_RESULT_PROVENANCE_SERIALIZED_CHARS,
@@ -414,16 +415,29 @@ class FindingMaterializationError(ValueError):
     """Reject an invalid model semantic batch while preserving valid provenance."""
 
 
+@dataclass(frozen=True, slots=True)
+class _FindingMaterializationOutcome:
+    """Published Findings and limitations retained from omitted no-Evidence drafts."""
+
+    findings: tuple[ResearchFinding, ...]
+    limitations: tuple[str, ...]
+
+
 def _materialize_findings(
     *,
     task: MedicalResearchTask,
     compression: ResearchCompression,
     evidence_records: list[EvidenceRecord],
-) -> list[ResearchFinding]:
+) -> _FindingMaterializationOutcome:
     """Resolve model Evidence references and assign deterministic Finding identities."""
     known_evidence_ids = {record.evidence_id for record in evidence_records}
     findings: list[ResearchFinding] = []
+    omitted_limitations: list[str] = []
     for ordinal, draft in enumerate(compression.findings, start=1):
+        if not draft.evidence_ids:
+            omitted_limitations.append(EVIDENCE_INSUFFICIENT_MARKER)
+            omitted_limitations.extend(draft.limitations)
+            continue
         unknown = set(draft.evidence_ids) - known_evidence_ids
         if unknown:
             raise FindingMaterializationError(
@@ -458,7 +472,10 @@ def _materialize_findings(
             raise FindingMaterializationError(
                 "compression_finding_validation_failure: invalid Finding draft"
             ) from error
-    return findings
+    return _FindingMaterializationOutcome(
+        findings=tuple(findings),
+        limitations=tuple(dict.fromkeys(omitted_limitations)),
+    )
 
 
 def _render_compression_evidence(
@@ -1772,11 +1789,12 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
             messages = [SystemMessage(content=compression_prompt)] + researcher_messages
             response = await synthesizer_model.ainvoke(messages)
             compression = ResearchCompression.model_validate(response)
-            findings = _materialize_findings(
+            materialized_findings = _materialize_findings(
                 task=task,
                 compression=compression,
                 evidence_records=evidence_records,
             )
+            findings = list(materialized_findings.findings)
             raw_notes_content = "\n".join(
                 str(message.content)
                 for message in filter_messages(
@@ -1786,6 +1804,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
 
             status = state.get("research_task_status", ResearchTaskStatus.SUCCESS)
             limitations = list(compression.limitations)
+            limitations.extend(materialized_findings.limitations)
             limitations.extend(
                 limitation for finding in findings for limitation in finding.limitations
             )

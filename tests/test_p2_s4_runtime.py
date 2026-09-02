@@ -123,6 +123,15 @@ class EmptyCompressionModel(CompressionModel):
         )
 
 
+def test_research_compression_prompt_separates_findings_from_coverage_gaps() -> None:
+    prompt = runtime.compress_research_system_prompt
+
+    assert "must reference at least one materialized, admitted Evidence ID" in prompt
+    assert "do not create a ResearchFinding with an empty evidence_ids list" in prompt
+    assert "task-level limitations" in prompt
+    assert 'exact marker "evidence-insufficient"' in prompt
+
+
 class SupervisorSequenceModel:
     """Drive two Supervisor delegations followed by explicit completion."""
 
@@ -753,6 +762,81 @@ async def test_provenance_payload_bound_participates_in_state_admission(
         )
         <= configured_bound
     )
+
+
+@pytest.mark.asyncio
+async def test_compression_omits_zero_evidence_finding_and_preserves_limitation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Publish Evidence-backed siblings and retain no-Evidence semantics as limitations."""
+    artifact_run_id = "zero-evidence-finding-run"
+    run_config = {
+        "configurable": {
+            "artifact_store_root": str(tmp_path),
+            "artifact_run_id": artifact_run_id,
+        }
+    }
+    search_result = await execute_tavily_search_structured(
+        ["treatment guideline benefits harms"],
+        config=run_config,
+        provider_responses=[provider_fixture()],
+        selection_model=SelectingModel(),
+        artifact_store=LocalFileArtifactStore(tmp_path, artifact_run_id),
+    )
+
+    class MixedCompressionModel(CompressionModel):
+        async def ainvoke(self, messages):
+            self.messages = messages
+            return runtime.ResearchCompression(
+                summary="One conclusion was supported; one dimension lacked evidence.",
+                findings=[
+                    runtime.FindingDraft(
+                        text="The recommendation supports individualized treatment.",
+                        evidence_ids=[self.evidence_id],
+                        limitations=[],
+                        conflicts=[],
+                    ),
+                    runtime.FindingDraft(
+                        text="SECRET_ZERO_EVIDENCE_PROVIDER_PAYLOAD",
+                        evidence_ids=[],
+                        limitations=[
+                            "No admitted Evidence covered the requested subgroup."
+                        ],
+                        conflicts=[],
+                    ),
+                ],
+                limitations=[],
+                conflicts=[],
+            )
+
+    monkeypatch.setattr(
+        runtime,
+        "configurable_model",
+        MixedCompressionModel(search_result.evidences[0].evidence_id),
+    )
+
+    output = await runtime.compress_research(
+        {
+            "task": task(),
+            "artifact_run_id": artifact_run_id,
+            "researcher_messages": [AIMessage(content="Valid evidence was collected")],
+            "research_task_status": ResearchTaskStatus.SUCCESS,
+            "source_records": search_result.sources,
+            "evidence_records": search_result.evidences,
+            "findings": [],
+        },
+        run_config,
+    )
+
+    result = ResearchTaskResult.model_validate(output["research_task_result"])
+    assert [finding.text for finding in result.findings] == [
+        "The recommendation supports individualized treatment."
+    ]
+    assert result.findings[0].evidence_ids == [search_result.evidences[0].evidence_id]
+    assert "evidence-insufficient" in result.limitations
+    assert "No admitted Evidence covered the requested subgroup." in result.limitations
+    assert "SECRET_ZERO_EVIDENCE_PROVIDER_PAYLOAD" not in result.model_dump_json()
 
 
 @pytest.mark.asyncio
