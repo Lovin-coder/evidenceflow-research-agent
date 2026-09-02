@@ -71,6 +71,36 @@ from open_deep_research.utils import get_api_key_for_model
 
 _MAX_ISSUE_OCCURRENCE_KEY_CHARS = 512
 _ISSUE_PAYLOAD_CONFLICT_CODE = "ISSUE_PAYLOAD_CONFLICT"
+_LIMITATIONS_HEADING = "## Research Limitations and Execution Constraints"
+
+
+def _collect_research_limitations(
+    research_results: Sequence[ResearchTaskResult],
+) -> tuple[str, ...]:
+    """Preserve task limitation text in first-occurrence research-result order."""
+    seen: set[str] = set()
+    collected: list[str] = []
+    for result in research_results:
+        for limitation in result.limitations:
+            if limitation in seen:
+                continue
+            seen.add(limitation)
+            collected.append(limitation)
+    return tuple(collected)
+
+
+def _append_research_limitations(report: str, limitations: Sequence[str]) -> str:
+    """Append exact Host-owned task limitations without changing their semantics."""
+    if not limitations:
+        return report
+    appendix = "\n".join(
+        [
+            _LIMITATIONS_HEADING,
+            "",
+            *(f"- {limitation}" for limitation in limitations),
+        ]
+    )
+    return f"{report.rstrip()}\n\n{appendix}\n"
 
 
 @dataclass(frozen=True)
@@ -571,6 +601,10 @@ async def run_global_synthesis(
             max_retries=configurable.max_structured_output_retries,
             limits=limits,
             sleep=asyncio.sleep,
+        )
+        report = _append_research_limitations(
+            report,
+            _collect_research_limitations(research_results),
         )
     except Exception as error:
         stage = GlobalSynthesisStage.RENDERER_VALIDATION

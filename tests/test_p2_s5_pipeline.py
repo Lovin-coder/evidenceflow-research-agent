@@ -17,6 +17,7 @@ from open_deep_research.domain_models import (
     FindingRef,
     GroundingManifest,
     ResearchFinding,
+    ResearchTaskStatus,
 )
 from open_deep_research.global_synthesis.pipeline import (
     _configured_synthesis_models,
@@ -32,7 +33,7 @@ from open_deep_research.global_synthesis.types import (
     ReportSectionDraft,
     ShadowReportDraft,
 )
-from open_deep_research.prompts import CLAIM_GENERATION_PROMPT
+from open_deep_research.prompts import CLAIM_GENERATION_PROMPT, SHADOW_RENDERER_PROMPT
 from open_deep_research.state import GlobalSynthesisStatus
 
 
@@ -173,6 +174,23 @@ def test_claim_generation_prompt_matches_claim_draft_wire_contract() -> None:
     assert "Return Claim semantics and FindingRefs only" not in CLAIM_GENERATION_PROMPT
 
 
+def test_shadow_renderer_prompt_preserves_claim_authority_and_host_limitations() -> None:
+    normalized_prompt = " ".join(SHADOW_RENDERER_PROMPT.split())
+
+    assert "renderer, not a new factual authority" in normalized_prompt
+    assert "must not introduce a new factual proposition or interpretation" in (
+        normalized_prompt
+    )
+    assert "Do not add causal, biological, mechanistic, or statistical explanations" in (
+        normalized_prompt
+    )
+    assert "Preserve Claim scope and qualifiers" in SHADOW_RENDERER_PROMPT
+    assert "limitations are Host-owned publication content" in normalized_prompt
+    assert "Do not invent, rewrite, summarize, translate, or add a limitation section" in (
+        normalized_prompt
+    )
+
+
 def test_configured_synthesis_models_preserve_role_mapping_and_policy(
     monkeypatch,
 ) -> None:
@@ -286,7 +304,47 @@ async def test_pipeline_happy_path_publishes_manifest_then_report(
     assert len(outcome.manifest.claims) == 1
     assert len(outcome.manifest.citations) == 1
     assert outcome.shadow_report is not None
+    assert "## Research Limitations and Execution Constraints" not in outcome.shadow_report
     assert models.calls == {"a": 1, "b": 1, "c": 1}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_appends_partial_research_limitations_in_stable_order(
+    tmp_path,
+) -> None:
+    first = _result("task-1").model_copy(
+        update={
+            "status": ResearchTaskStatus.PARTIAL,
+            "limitations": ["limitation A", "limitation B"],
+        }
+    )
+    second = _result("task-2").model_copy(
+        update={"limitations": ["limitation B", "limitation C"]}
+    )
+    outcome = await run_global_synthesis(
+        medical_research_brief=_brief(),
+        research_results=[first, second],
+        artifact_run_id="limitation-append-run",
+        config={"configurable": {"max_structured_output_retries": 0}},
+        artifact_store=LocalFileArtifactStore(tmp_path, "limitation-append-run"),
+        models=_HappyModels().bundle(),
+    )
+
+    assert outcome.status is GlobalSynthesisStatus.SUCCESS
+    assert outcome.shadow_report is not None
+    appendix = outcome.shadow_report[
+        outcome.shadow_report.index("## Research Limitations and Execution Constraints") :
+    ]
+    assert appendix.splitlines() == [
+        "## Research Limitations and Execution Constraints",
+        "",
+        "- limitation A",
+        "- limitation B",
+        "- limitation C",
+    ]
+    assert outcome.shadow_report.count("- limitation B") == 1
+    assert "Treatment improves outcomes." in outcome.shadow_report
+    assert outcome.issues == ()
 
 
 @pytest.mark.asyncio

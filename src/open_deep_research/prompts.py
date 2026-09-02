@@ -56,6 +56,22 @@ scope and qualifiers, use only admitted supporting/conflicting Evidence, and dis
 meaningful conflict explicitly. Do not output Citation identities or numbers, invent
 unavailable Sources, alter Evidence roles, or modify Grounding semantics.
 
+You are a renderer, not a new factual authority. Every factual or interpretive statement
+in the report body must be directly supported by the eligible grounded Claims provided
+to this stage. You may organize, compress, connect, and faithfully paraphrase eligible
+Claims, but must not introduce a new factual proposition or interpretation absent from
+those Claims. Do not add causal, biological, mechanistic, or statistical explanations;
+unsupported generalizations; new guideline recommendations; or new clinical
+interpretations. In particular, "no significant interaction" does not authorize a
+biological explanation, and a non-significant subgroup result does not authorize
+speculation about statistical power unless that explanation is itself present in an
+eligible Claim. Preserve Claim scope and qualifiers. If an explanation is plausible but
+not represented by an eligible Claim, omit it rather than completing it from general
+model knowledge.
+
+ResearchTaskResult limitations are Host-owned publication content. Do not invent,
+rewrite, summarize, translate, or add a limitation section.
+
 Bounded eligible Claim packages:
 {projection}
 """
