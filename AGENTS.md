@@ -3,9 +3,8 @@
 ## 1. Project Goal
 
 EvidenceFlow is an evidence-centric medical deep research Agent developed from
-a frozen Open Deep Research baseline.
-
-It is now an independently evolving project-owned fork.
+a frozen Open Deep Research baseline and now evolving as an independent
+project-owned fork.
 
 Engineering priorities are:
 
@@ -16,33 +15,26 @@ correctness
 → testability
 → readability
 → reuse
-```
 
 Detailed engineering guidance lives in:
 
-```text
 docs/application_track/EVIDENCEFLOW_ENGINEERING_GUIDELINES.md
-```
 
-Consult the relevant sections before substantial project-owned implementation
-work. Do not re-read the entire document by default when only a bounded section
-is relevant.
+Consult only the sections relevant to the current implementation question.
+Do not re-read the entire document by default.
 
-## 2. Authority Model
+2. Authority and Phase Workflow
 
-Engineering governance and semantic authority are related but distinct.
+Engineering governance and frozen semantic authority are distinct.
 
 Repository engineering governance:
 
-```text
 AGENTS.md
 ↓
 EVIDENCEFLOW_ENGINEERING_GUIDELINES.md
-```
 
 Frozen semantic and implementation authority:
 
-```text
 EVIDENCEFLOW_CONTRACTS_V1.md
 ↓
 phase *_SPEC.md
@@ -56,31 +48,18 @@ phase *_TASKS.md
 phase *_CHECKLIST.md
 ↓
 implementation
-```
-
-Engineering governance defines how work is performed.
-
-Frozen phase artifacts define what behavior, semantics, scope, architecture,
-dependencies, and acceptance criteria must be implemented.
 
 Lower-level artifacts MUST NOT silently override higher-level frozen semantics.
-
-If engineering constraints and frozen semantic authority appear incompatible,
-STOP the affected work and surface the conflict. Do not silently reinterpret
-either authority.
 
 If implementation requires changing a frozen Domain contract, State semantic,
 identity/reference rule, topology, persistence rule, migration rule, failure
 rule, phase scope, or acceptance criterion, STOP the affected work and surface
-the ambiguity through the phase clarification process.
+the conflict.
 
 Do not make architecture-sensitive decisions implicitly during coding.
 
-## 3. Phase Workflow
+Each implementation phase follows:
 
-Every implementation phase follows:
-
-```text
 SPEC
 → CLARIFICATIONS
 → PLAN
@@ -88,105 +67,85 @@ SPEC
 → CHECKLIST
 → IMPLEMENTATION
 → CLOSEOUT
-```
+*_SPEC.md defines baseline, scope, non-goals, invariants, requirements,
+acceptance criteria, and architecture-sensitive OPEN decisions.
+*_CLARIFICATIONS.md records alternatives, human decisions, rationale,
+deferred work, and canonical promotion status.
+*_PLAN.md maps frozen semantics to repository implementation.
+*_TASKS.md decomposes the PLAN into bounded implementation work.
+*_CHECKLIST.md records reproducible verification and closeout evidence.
 
-- `*_SPEC.md` defines audited baseline, scope, non-goals, invariants,
-  requirements, acceptance criteria, and architecture-sensitive OPEN decisions.
-- `*_CLARIFICATIONS.md` records alternatives, human decisions, rationale,
-  impact, deferred work, and canonical promotion status.
-- `*_PLAN.md` maps frozen semantics to repository files, implementation
-  structure, runtime integration, sequencing, migration, failure handling, and
-  validation. PLAN MUST NOT invent architecture to fill a SPEC gap.
-- `*_TASKS.md` decomposes the frozen PLAN into bounded and reviewable work.
-- `*_CHECKLIST.md` records reproducible verification and closeout evidence. It
-  is not a second PLAN.
-
-Blocking OPEN decisions prevent PLAN/TASKS freeze and affected implementation.
-
-A commit existing in history does not by itself prove review or acceptance.
+Blocking OPEN decisions prevent affected implementation.
 
 Use phase-scoped identifiers such as:
 
-```text
 S5-R01
 S5-D01
 S5-T01
-```
 
-and preserve traceability through PLAN, TASKS, CHECKLIST, tests, and closeout.
+and preserve traceability through implementation, tests, verification, and
+closeout.
 
-## 4. Architecture and Contract Constraints
-
-- Preserve the Supervisor–Researcher Tool Loop unless frozen design explicitly
-  changes it.
-- Preserve runtime-adaptive Supervisor behavior.
-- Do not introduce Send, RAG, durable queues, background workers, new
-  persistence systems, or unrelated platform changes implicitly.
-- Process artifacts MUST NOT be treated as external factual Evidence.
-- Raw or large Source artifacts MUST NOT be persisted directly in Graph State.
-- Preserve stable Source/Evidence provenance and explicit task/result
-  contracts.
-- `ResearchTaskResult` MUST NOT publish dangling provenance references.
-- Presentation artifacts MUST NOT become provenance authority.
-- Model output MUST NOT own stable identity where Contracts assign identity to
-  the Host.
-- Host logic MUST NOT replace frozen Model semantic authority with undocumented
-  heuristics.
-- Schema changes require contract tests and canonical documentation updates.
-
-## 5. Implementation Hard Rules
-
-### Code structure
-
-- Split functions by semantic responsibility, not by line count.
-- Do not extract helpers solely to shorten a function.
-- Graph nodes and application coordinators SHOULD remain orchestration-thin.
-- Keep deterministic Domain logic, side effects, and Graph State updates
-  clearly separated.
-- Avoid God modules.
-- Prefer small semantic packages when a subsystem contains multiple
-  independently testable responsibilities.
-- Do not create speculative abstractions or frameworks without a current
-  consumer.
-- Module-private helpers SHOULD use a leading underscore.
-- Do not use generic `utils.py` modules as dumping grounds for Domain-specific
-  behavior.
-
-### State and authority
-
-- Internal helpers SHOULD return typed values or outcomes instead of mutating
-  LangGraph State directly.
-- Important State fields must have clear writer and lifecycle ownership.
-- Reducer-backed reset behavior must use the explicitly planned framework
-  mechanism.
-- Do not assume an empty collection clears an append reducer.
-- Concurrent completion order MUST NOT define authoritative ordering.
-
-### Validation and failure
-
-- Validators reject invalid input; they MUST NOT silently invent semantic
-  repairs.
-- Publication Gates are validate-not-repair.
-- Do not silently convert operational failures into valid semantic
-  empty/success results.
-- No bare `except:`.
-- Broad `except Exception` is allowed only at documented isolation boundaries.
-- Do not swallow cancellation or system-level control-flow exceptions as
-  ordinary business failures.
-
-### Retry
-
-- Every logical Model stage MUST have one semantic retry authority.
-- Do not multiply logical attempts by stacking independent semantic retry
-  layers.
-- Valid negative semantic results MUST NOT be retried merely to obtain a more
-  favorable result.
-
-### Typing
+3. Architecture and Contract Boundaries
+Preserve the Supervisor–Researcher Tool Loop unless frozen design explicitly
+changes it.
+Preserve runtime-adaptive Supervisor behavior.
+Do not introduce Send, RAG, durable queues, background workers, new
+persistence systems, or unrelated platform changes implicitly.
+Process artifacts MUST NOT be treated as external factual Evidence.
+Raw or large Source artifacts MUST NOT be persisted directly in Graph State.
+Preserve stable Source/Evidence provenance and explicit task/result
+contracts.
+ResearchTaskResult MUST NOT publish dangling provenance references.
+Presentation artifacts MUST NOT become provenance authority.
+Model output MUST NOT own stable identity where Contracts assign identity to
+the Host.
+Host logic MUST NOT replace frozen Model semantic authority with undocumented
+heuristics.
+Schema changes require contract tests and canonical documentation updates.
+4. Implementation Hard Rules
+Code structure
+Split functions by semantic responsibility, not by line count.
+Do not extract helpers solely to shorten a function.
+Graph nodes and application coordinators SHOULD remain orchestration-thin.
+Keep deterministic Domain logic, side effects, and Graph State updates
+clearly separated.
+Avoid God modules.
+Prefer small semantic packages when a subsystem contains multiple
+independently testable responsibilities.
+Do not create speculative abstractions or frameworks without a current
+consumer.
+Module-private helpers SHOULD use a leading underscore.
+Do not use generic utils.py modules as dumping grounds for Domain-specific
+behavior.
+State and authority
+Internal helpers SHOULD return typed values or outcomes instead of mutating
+LangGraph State directly.
+Important State fields must have clear writer and lifecycle ownership.
+Reducer-backed reset behavior must use the explicitly planned framework
+mechanism.
+Do not assume an empty collection clears an append reducer.
+Concurrent completion order MUST NOT define authoritative ordering.
+Validation and failure
+Validators reject invalid input; they MUST NOT silently invent semantic
+repairs.
+Publication Gates are validate-not-repair.
+Do not silently convert operational failures into valid semantic
+empty/success results.
+No bare except:.
+Broad except Exception is allowed only at documented isolation boundaries.
+Do not swallow cancellation or system-level control-flow exceptions as
+ordinary business failures.
+Retry
+Every logical Model stage MUST have one semantic retry authority.
+Do not multiply logical attempts by stacking independent semantic retry
+layers.
+Valid negative semantic results MUST NOT be retried merely to obtain a more
+favorable result.
+Typing
 
 Use:
 
-```text
 TypedDict
 → LangGraph State schemas
 
@@ -195,181 +154,202 @@ Pydantic
 
 dataclass(frozen=True)
 → immutable Host-internal value/execution objects
-```
+Avoid dict[str, Any] across project-owned semantic boundaries.
+New EvidenceFlow modules MUST NOT introduce new mypy errors.
+Touched project-owned code SHOULD NOT introduce new type debt.
+Do not use broad # type: ignore, # noqa, or rule disabling merely to make
+checks pass.
+5. Codex Execution Discipline
 
-- Avoid `dict[str, Any]` across project-owned semantic boundaries.
-- New EvidenceFlow modules MUST NOT introduce new mypy errors.
-- Touched project-owned code SHOULD NOT introduce new type debt.
-- Do not use broad `# type: ignore`, `# noqa`, or rule disabling merely to make
-  checks pass.
+Confirmed decisions, prior verified analysis, completed work, passing
+validations, and accepted Plan handoffs are reusable authority.
 
-## 6. Context and Observation Discipline
+Do not rediscover or re-prove confirmed information without concrete
+contradictory repository evidence.
+When a task specifies exact files, symbols, invariants, implementation shape,
+or patch behavior, treat them as the execution specification.
+Inspect only the smallest local code range required to apply a specified
+change.
+Prefer file + symbol over broad module exploration or fragile line numbers.
+Do not perform repository-wide or full-document reads for localized changes.
+Expand observation only for a concrete unresolved correctness, dependency,
+contract, lifecycle, provenance, or architecture question.
+Working mode implements settled decisions. It MUST NOT independently redesign
+them without contradictory code evidence.
+Review mode is diff-focused. It MUST NOT restart repository reconnaissance or
+reconsider frozen design without a concrete finding.
+Do not split one coherent deterministic patch into multiple Codex turns merely
+to make the task appear smaller.
+Stop when the requested patch, focused tests, and specified validations are
+complete.
+Do not search for unrelated cleanup, improvements, speculative risks, or
+review-of-the-review.
+6. Context and Handoff Continuity
 
-Use the smallest repository working set that is sufficient to complete the
-current task correctly.
+Use the smallest repository working set sufficient for correctness.
 
 Start from:
 
-- files and symbols explicitly named by the current task;
-- the current git status and relevant diff;
-- directly affected callers, callees, State/Contract boundaries, and tests.
+files and symbols explicitly named by the current task;
+current git status and relevant diff;
+directly affected interfaces and tests.
 
-Prefer search before reading:
+Prefer:
 
-- locate symbols, requirements, and task sections with targeted search;
-- read relevant sections or line ranges instead of entire large files;
-- do not read large frozen documents in full unless a concrete unresolved
-  correctness question requires the whole document.
+exact symbol / Task / requirement / question
+→ targeted search
+→ smallest relevant code or document range
+→ resolve
+→ stop
 
-A larger repository context is not automatically better context.
+over full-file, full-document, or repository-wide reading.
 
-When a phase is frozen and implementation is authorized:
+When a phase is frozen:
 
-- use the current TASKS section as the normal implementation entry point;
-- use the accepted PLAN as the implementation-architecture backing source;
-- consult SPEC, CLARIFICATIONS, or Contracts only for the specific semantic
-  question that requires higher authority;
-- do not repeatedly reconstruct the phase design from all frozen documents.
-
-Expand scope only when a concrete unresolved question could materially change:
-
-- contract correctness;
-- State or lifecycle semantics;
-- provenance or identity;
-- persistence behavior;
-- graph topology;
-- failure/publication behavior;
-- implementation ownership;
-- or required validation.
+use the current TASKS section as the normal implementation entry point;
+use the accepted PLAN as implementation-architecture backing authority;
+consult SPEC, CLARIFICATIONS, Contracts, or CHECKLIST only for a concrete
+unresolved semantic question.
 
 Follow at most one direct dependency hop by default.
+Expand further only when concrete evidence requires it for correctness.
 
-Expand further only when the current evidence shows that another dependency is
-required for correctness.
+A completed Plan is a verified implementation handoff.
 
-Do not recursively inspect neighboring modules, historical documents, archived
-reviews, or unrelated tests merely for completeness or additional confidence.
+Reuse:
 
-## 7. Planning-to-Implementation Continuity
+confirmed decisions;
+mapped files and symbols;
+existing interfaces/helpers to reuse;
+identified tests;
+validation commands;
+explicitly excluded scope.
 
-A completed planning pass is a verified handoff, not disposable analysis.
-
-When implementation follows an accepted execution plan:
-
-- reuse confirmed decisions;
-- reuse the implementation file/symbol map;
-- reuse identified tests and validation commands;
-- reuse explicitly excluded scope;
-- do not independently rediscover the same architecture or contracts.
-
-Before implementation, perform only a lightweight freshness check of the
-repository base and relevant working-tree changes.
+Before Working mode, perform only a lightweight freshness check unless relevant
+repository state has materially changed.
 
 Repeat investigation only when:
 
-- the repository base materially changed;
-- a relevant file materially changed;
-- implementation reveals a concrete contradiction;
-- a test or type failure exposes a previously unknown dependency;
-- or the handoff lacks a fact required for correctness.
+the repository base materially changed;
+a relevant target materially changed;
+implementation reveals a concrete contradiction;
+focused validation exposes an unknown dependency;
+or the handoff lacks information required for correctness.
 
-When refresh is required, prefer a targeted delta refresh over repeating the
-entire planning investigation.
+Use a targeted delta refresh rather than repeating the full planning
+investigation.
 
-## 8. Change and Task Discipline
+7. Testing and Validation Discipline
 
-- Make the smallest coherent change required by the current task.
-- Separate BASELINE, IMPLEMENTED, and PROPOSED.
-- Do not refactor unrelated code.
-- Project-owned modules MAY be reorganized when the frozen PLAN explicitly
-  requires clearer ownership, readability, or maintainability.
-- Do not modify dependencies or lockfiles unless explicitly required and
-  reported.
-- Do not build future-phase infrastructure during the current phase.
-- Do not weaken tests, validators, typing, or acceptance gates to make a task
-  pass.
+Tests should match the lowest sufficient semantic boundary.
 
-Each implementation task should define:
+changed invariant              lowest sufficient test
 
-- Goal
-- Frozen Requirements Implemented
-- Allowed Files
-- Forbidden Changes
-- Implementation Boundaries
-- Required Tests
-- Stop Conditions
-- Acceptance Criteria
-- Expected Diff Shape
+helper                         helper unit test
+Host admission                 admission unit test
+node behavior                  node test
+pipeline interaction           pipeline test
+graph topology                 integration test
+provider compatibility         provider smoke
 
-Task scope is binding.
+Do not test a localized helper invariant through provider/search/runtime
+integration when the helper can be exercised directly.
 
-For large phases, execute bounded implementation packets rather than expanding
-one working turn across the entire phase by default.
+Use progressive validation:
 
-A packet should contain a coherent set of dependency-compatible Tasks with a
-clear validation boundary.
+focused test
+→ directly affected regression
+→ Ruff on touched files
+→ scoped mypy where applicable
+→ git diff --check
+→ one diff-focused sanity review
 
-STOP instead of improvising if a task unexpectedly requires:
+Do not rerun an unchanged passing validation when no relevant code or dependency
+has changed.
 
-- a new stable Domain field;
-- changed State semantics;
-- changed identity/reference scope;
-- changed topology;
-- new persistence behavior;
-- a new dependency;
-- new Model authority;
-- new fallback behavior;
-- weakened acceptance criteria.
+Validation Stop-Loss
 
-## 9. Review and Validation Discipline
+When a validation command fails:
 
-Use progressive validation.
+Determine whether the failure points to touched code.
+If yes, fix the owning implementation and rerun the affected validation.
+If the failure matches a known baseline, dependency, environment, or tooling
+failure, record it and stop investigating that validation path.
+Do not experiment with alternate environment variables, invocation modes,
+dependency upgrades, cache changes, or unrelated configuration unless the
+current task explicitly targets that validation infrastructure.
 
-During implementation:
+Do not weaken tests, validators, typing, or acceptance criteria to make a task
+pass.
 
-- run the narrowest relevant tests first;
-- run targeted checks for the files or behavior currently being changed;
-- fix failures at the owning implementation boundary;
-- avoid repeatedly running broad validation while the packet is still
-  incomplete.
+Broader deterministic regression belongs at explicit integration, milestone,
+merge, release, or dedicated audit gates.
 
-When a coherent implementation packet is complete:
+Provider smoke tests are for provider compatibility boundaries, not substitutes
+for local unit tests.
 
-- run its focused tests;
-- run directly affected regression tests;
-- run Ruff on new/touched files;
-- run scoped mypy on applicable new/touched project-owned code;
-- run `git diff --check`;
-- perform one diff-focused sanity review.
+8. Change and Task Discipline
 
-The diff-focused review should check:
+Make the smallest coherent change required by the current task.
 
-- correctness against the accepted task;
-- frozen contract adherence;
-- directly affected regression risk;
-- accidental unrelated changes;
-- test or validation weakening.
+Separate BASELINE, IMPLEMENTED, and PROPOSED.
+Do not refactor unrelated code.
+Do not modify dependencies or lockfiles unless explicitly required.
+Do not build future-phase infrastructure during the current phase.
+Project-owned modules MAY be reorganized when the frozen PLAN explicitly
+requires clearer ownership or maintainability.
 
-Do not perform a repository-wide architecture audit after each edit or packet.
+A well-specified implementation task should provide, where applicable:
 
-Do not repeatedly audit a frozen decision merely because implementation changed.
+Goal
+Known/Frozen Decisions
+Target Files and Symbols
+Required Change
+Invariants
+Required Tests
+Validation
+Forbidden Changes
+Stop Conditions
 
-Broader deterministic regression and architecture-level review belong at
-explicit convergence, milestone, merge, release, or dedicated audit gates.
+When the implementation shape has already been verified, use it directly.
+Do not make Working mode choose among equivalent helper structures, return
+shapes, validation locations, or test strategies without a genuine unresolved
+reason.
 
-If targeted validation exposes concrete evidence of a wider regression, expand
-validation only to the affected area first.
+For large phases, use coherent dependency-compatible implementation packets.
+Do not artificially split one small deterministic patch across multiple turns.
 
-## 10. Documentation
+STOP instead of improvising if implementation unexpectedly requires:
+
+a new stable Domain field;
+changed State semantics;
+changed identity/reference scope;
+changed graph topology;
+new persistence behavior;
+a new dependency;
+new Model authority;
+new fallback semantics;
+weakened acceptance criteria.
+9. Documentation
 
 Python comments and docstrings MUST remain in English.
 
-Document business semantics, invariants, authority boundaries, and non-obvious
-trade-offs rather than restating code.
+Project-owned explanatory documentation SHOULD be Chinese-first unless a
+canonical artifact explicitly requires English.
 
-Project-owned Domain contracts and non-trivial reducers, lifecycle controllers,
-adapters, Publication Gates, renderers, and failure boundaries should have
-concise useful documentation.
+File names, paths, class/function names, protocol names, framework names, and
+technical identifiers remain in their canonical English form.
+
+Document:
+
+business semantics;
+invariants;
+authority boundaries;
+lifecycle ownership;
+failure semantics;
+non-obvious engineering trade-offs.
+
+Do not restate obvious code behavior.
 
 Regression tests should identify the invariant they protect when the reason is
 not obvious.
@@ -377,55 +357,38 @@ not obvious.
 Do not create documentation merely to duplicate frozen authority that already
 has a canonical home.
 
-## 11. Completion and Handoff
+10. Completion and Review
 
-Every completed implementation packet must report concisely:
+Every completed implementation packet should report only what is needed to
+continue safely:
 
-- Tasks completed
-- Files changed
-- Behavior changed
-- Requirements/decisions implemented
-- Focused tests run
-- Static checks run
-- Remaining risks
-- Remaining TODOs or deferred work
-- Unexpected scope changes
-- Blockers
-- Next dependency-ready packet
+files/symbols changed;
+behavior changed;
+focused tests run;
+static validations run;
+known validation limitations;
+remaining blockers or deferred work.
 
-Do not claim runtime or integration validation when only static or mocked tests
-were executed.
+Do not claim runtime/provider/integration validation when only static or mocked
+tests were executed.
 
-Do not re-summarize frozen architecture or documents in routine completion
-reports.
+A normal Review should inspect the diff and directly affected behavior only.
 
-## 12. Stopping Rule
+Review should answer:
 
-Stop repository exploration when:
+Does the diff implement the requested behavior?
+Are frozen invariants preserved?
+Do tests protect the changed boundary?
+Did unrelated changes enter the diff?
+Was validation, typing, or acceptance weakened?
+Is there a concrete regression caused by this diff?
 
-- the implementation surface is known;
-- the relevant frozen requirements are resolved;
-- the requested behavior is implemented;
-- directly affected validation passes;
-- and there is no concrete evidence of an out-of-scope regression.
+If no concrete issue remains, stop.
 
-Do not continue searching for additional improvements, refactors, cleanup
-opportunities, or review findings unless required by the current task.
-
-Do not expand scope merely to increase confidence.
-
-When uncertainty remains, distinguish between:
-
-- uncertainty that can materially change correctness or architecture; and
-- uncertainty that can be resolved safely and locally during implementation.
-
-Only the former justifies significant scope expansion.
-
-## 13. Core Engineering Principle
+11. Core Engineering Principle
 
 EvidenceFlow implementation should preserve this model:
 
-```text
 LLMs propose bounded semantics.
 
 The Host owns deterministic identity, resolution, validation,
@@ -443,4 +406,6 @@ Code structure should make the architecture visible.
 
 Repository observation should remain bounded by the concrete correctness
 questions of the current task.
-```
+
+Settled reasoning should be converted into deterministic execution rather than
+repeated during implementation.
